@@ -1,0 +1,62 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"text/template"
+
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
+	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+)
+
+func main() {
+	// Run database migrations.
+	m := database.RunMigrations()
+	defer database.CloseMigrations(m)
+
+	// Open the application database connection.
+	db := database.OpenDatabase()
+	defer db.Close()
+
+	// Verify that the database is reachable.
+	if err := db.Ping(); err != nil {
+		log.Fatal("Error connecting to database:", err)
+	}
+
+	// Delete old jobs.
+	if err := jobs.DeleteOldJobs(db, 10); err != nil {
+		log.Fatal("Error deleting old jobs:", err)
+	}
+
+	// Serve the index.html file.
+	tmpl, err := template.ParseFiles("web/index.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Serve static files.
+	fs := http.FileServer(http.Dir("web"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	// Handle the root URL.
+	http.HandleFunc("/", apphttp.IndexHandler(db, tmpl))
+
+	// Handle the results page.
+	http.HandleFunc("/results", apphttp.ResultsHandler(db))
+	http.HandleFunc("/results/visualization", apphttp.VisualizationHandler(db))
+
+	// Handle the download of result files.
+	http.HandleFunc("/results/download", apphttp.DownloadResultsHandler(db))
+	http.HandleFunc("/results/download/model", apphttp.DownloadModelHandler(db))
+
+	// Handle dataset inspection.
+	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)
+
+	// Handle job submission.
+	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db))
+
+	// Start the HTTP server.
+	log.Println("Server is running on http://localhost:8082")
+	log.Fatal(http.ListenAndServe(":8082", nil))
+}

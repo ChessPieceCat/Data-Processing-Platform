@@ -1,0 +1,333 @@
+package server
+
+import "text/template"
+
+var ResultsTemplate = template.Must(template.New("results").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job #{{.Job.ID}} Results</title>
+</head>
+<body>
+    <h1>Job #{{.Job.ID}} Results</h1>
+
+    <section>
+        <h2>Job Information</h2>
+        <dl>
+            <dt>Type</dt>
+            <dd>{{.Job.Type}}</dd>
+
+            <dt>Status</dt>
+            <dd>{{.Job.Status}}</dd>
+
+            <dt>Created</dt>
+            <dd>{{.Job.CreatedAt}}</dd>
+
+            {{with .Job.StartedAt}}
+            <dt>Started</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+
+            {{with .Job.CompletedAt}}
+            <dt>Completed</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+        </dl>
+    </section>
+
+    {{with .Job.ErrorMessage}}
+    <section>
+        <h2>Error</h2>
+        <p>{{.}}</p>
+    </section>
+    {{end}}
+
+    {{if .Results}}
+    <section>
+        <h2>Dataset Overview</h2>
+
+        <dl>
+            <dt>Rows</dt>
+            <dd>{{.Results.NumRows}}</dd>
+
+            <dt>Columns</dt>
+            <dd>{{.Results.NumColumns}}</dd>
+        </dl>
+
+        <h3>Columns</h3>
+
+        <ul>
+            {{range .Results.ColumnNames}}
+                <li>{{.}}</li>
+            {{end}}
+        </ul>
+    </section>
+
+    <section>
+        <h2>Data Types</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Column</th>
+                    <th>Type</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $column, $type := .Results.DataTypes}}
+                <tr>
+                    <td>{{$column}}</td>
+                    <td>{{$type}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Missing Values</h2>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Column</th>
+                    <th>Missing Values</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $column, $count := .Results.MissingValues}}
+                <tr>
+                    <td>{{$column}}</td>
+                    <td>{{$count}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Duplicates and Unique Values</h2>
+
+        <p>Duplicate rows: {{.Results.DuplicateRows}}</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Column</th>
+                    <th>Unique Values</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $column, $count := .Results.UniqueValues}}
+                <tr>
+                    <td>{{$column}}</td>
+                    <td>{{$count}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+
+    <section>
+        <h2>Descriptive Statistics</h2>
+
+        {{range $column, $stats := .Results.DescriptiveStats}}
+        <h3>{{$column}}</h3>
+
+        <table>
+            <tr>
+                <th>Count</th>
+                <td>{{$stats.Count}}</td>
+            </tr>
+            <tr>
+                <th>Mean</th>
+                <td>{{$stats.Mean}}</td>
+            </tr>
+            <tr>
+                <th>Standard Deviation</th>
+                <td>{{$stats.Std}}</td>
+            </tr>
+            <tr>
+                <th>Minimum</th>
+                <td>{{$stats.Min}}</td>
+            </tr>
+            <tr>
+                <th>25th Percentile</th>
+                <td>{{$stats.Q25}}</td>
+            </tr>
+            <tr>
+                <th>Median</th>
+                <td>{{$stats.Median}}</td>
+            </tr>
+            <tr>
+                <th>75th Percentile</th>
+                <td>{{$stats.Q75}}</td>
+            </tr>
+            <tr>
+                <th>Maximum</th>
+                <td>{{$stats.Max}}</td>
+            </tr>
+        </table>
+        {{end}}
+    </section>
+
+    <section>
+        <h2>Numeric Summary</h2>
+
+        {{range $column, $summary := .Results.NumericSummary}}
+        <h3>{{$column}}</h3>
+
+        <dl>
+            <dt>Mean</dt>
+            <dd>{{$summary.Mean}}</dd>
+
+            <dt>Median</dt>
+            <dd>{{$summary.Median}}</dd>
+
+            <dt>Standard Deviation</dt>
+            <dd>{{$summary.StdDev}}</dd>
+
+            <dt>Minimum</dt>
+            <dd>{{$summary.Min}}</dd>
+
+            <dt>Maximum</dt>
+            <dd>{{$summary.Max}}</dd>
+        </dl>
+        {{end}}
+    </section>
+
+    <section>
+        <h2>Categorical Summary</h2>
+
+        {{range $column, $summary := .Results.CategoricalSummary}}
+        <h3>{{$column}}</h3>
+
+        <p>Mode: {{$summary.Mode}}</p>
+        <p>Unique values: {{$summary.UniqueValues}}</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Value</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $value, $count := $summary.ValueCounts}}
+                <tr>
+                    <td>{{$value}}</td>
+                    <td>{{$count}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{end}}
+    </section>
+
+    <section>
+        <h2>Outliers</h2>
+
+        {{range $column, $summary := .Results.OutlierSummary}}
+        <h3>{{$column}}</h3>
+
+        <p>Number of outliers: {{$summary.NumOutliers}}</p>
+        {{end}}
+    </section>
+
+    <section>
+        <h2>Correlation Matrix</h2>
+
+        {{range $column, $correlations := .Results.CorrelationMatrix}}
+        <h3>{{$column}}</h3>
+
+        <ul>
+            {{range $otherColumn, $value := $correlations}}
+                <li>{{$otherColumn}}: {{$value}}</li>
+            {{end}}
+        </ul>
+        {{end}}
+    </section>
+
+    <p>
+        <a href="/results/download?id={{.Job.ID}}">
+            Download results JSON
+        </a>
+    </p>
+
+    {{if .ModelResults}}
+    <section>
+        <h2>Model Results</h2>
+
+        <p>Model Type: {{.ModelResults.Model}}</p>
+        <p>R²: {{.ModelResults.Evaluation.R2}}</p>
+        <p>Mean Squared Error: {{.ModelResults.Evaluation.MSE}}</p>
+        <p>Features:</p>
+        <ul>
+            {{range .ModelResults.FeaturesUsed}}
+                <li>{{.}}</li>
+            {{end}}
+        </ul>
+        <p>Feature Importances:</p>
+        <ul>
+            {{range $feature, $importance := .ModelResults.FeatureImportances}}
+                <li>{{$feature}}: {{$importance}}</li>
+            {{end}}
+        </ul>
+        <p>Actual vs Predicted Values:</p>
+        <ul>
+        {{range .ModelResults.ActualVsPredicted}}
+            <li>Actual: {{.Actual}}, Predicted: {{.Predicted}}</li>
+        {{end}}
+        </ul>
+        <p>Target Variable: {{.ModelResults.Target}}</p>
+        <p>Configuration:</p>
+        <dl>
+            <dt>Number of Estimators</dt>
+            <dd>{{index .ModelResults.Configuration "n_estimators"}}</dd>
+
+            <dt>Max Depth</dt>
+            <dd>{{index .ModelResults.Configuration "max_depth"}}</dd>
+        </dl>
+        <p>
+            <a href="/results/download/model?id={{.Job.ID}}">
+                Download model results JSON
+            </a>
+        </p>
+    </section>
+    {{end}}
+
+    {{else}}
+        {{if eq .Job.Status "processing"}}
+            <p>The dataset is still being processed.</p>
+        {{else if eq .Job.Status "queued"}}
+            <p>The job is waiting to be processed.</p>
+        {{else}}
+            <p>No dataset results are currently available.</p>
+        {{end}}
+    {{end}}
+
+    {{if .VisualizationResults}}
+    <section>
+        <h2>Visualizations</h2>
+
+        {{if .VisualizationResults.FeatureDistributions}}
+        <h3>Feature Distributions</h3>
+        <img src="/results/visualization?id={{.Job.ID}}&type=feature_distributions" alt="Feature Distributions">
+        {{end}}
+
+        {{if .VisualizationResults.CorrelationHeatmap}}
+        <h3>Correlation Heatmap</h3>
+        <img src="/results/visualization?id={{.Job.ID}}&type=correlation_heatmap" alt="Correlation Heatmap">
+        {{end}}
+
+        {{if .VisualizationResults.ActualVsPredicted}}
+        <h3>Actual vs Predicted</h3>
+        <img src="/results/visualization?id={{.Job.ID}}&type=actual_vs_predicted" alt="Actual vs Predicted">
+        {{end}}
+    </section>
+    {{end}}
+
+    <p><a href="/">Back to jobs</a></p>
+</body>
+</html>`))

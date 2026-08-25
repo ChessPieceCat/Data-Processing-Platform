@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Processing Platform</title>
+</head>
+<body>
+
+    <header>
+        <h1>Data Processing Platform</h1>
+    </header>
+
+    <main>
+        <section>
+            <h2>Dataset Analysis</h2>
+
+            <div>
+                <label for="csvFile">Upload a CSV file:</label>
+                <input
+                    type="file"
+                    id="csvFile"
+                    name="csvFile"
+                    accept=".csv"
+                    required
+                >
+
+                <button type="button" id="inspectDataset">
+                    Inspect Dataset
+                </button>
+            </div>
+
+            <div id="datasetInfo" hidden>
+                <h3>Dataset Columns</h3>
+
+                <p id="datasetStatus"></p>
+
+                <form action="/submit/dataset" method="post">
+
+                    <input type="hidden" name="uploadID" id="uploadID">
+
+                    <!-- Model configuration -->
+                    <section>
+                        <h3>Model Configuration</h3>
+
+                        <div>
+                            <label for="model">Model:</label>
+                            <select name="model" id="model">
+                                <option value="none" selected>None</option>
+                                <option value="random_forest_regressor">
+                                    Random Forest Regressor
+                                </option>
+                            </select>
+                        </div>
+
+                        <div id="modelOptions" hidden>
+
+                            <br>
+
+                            <div>
+                                <label for="configType">Configuration:</label>
+                                <select name="configType" id="configType">
+                                    <option value="automatic" selected>
+                                        Automatic
+                                    </option>
+                                    <option value="manual">Manual</option>
+                                </select>
+                            </div>
+
+                            <br>
+
+                            <div>
+                                <label for="target">Target variable:</label>
+                                <select name="target" id="target">
+                                    <option value="">Select a target</option>
+                                </select>
+                            </div>
+
+                            <br>
+
+                            <fieldset>
+                                <legend>Features</legend>
+
+                                <label>
+                                    <input
+                                        type="radio"
+                                        name="featureSelection"
+                                        value="automatic"
+                                        checked
+                                    >
+                                    Automatic
+                                </label>
+
+                                <label>
+                                    <input
+                                        type="radio"
+                                        name="featureSelection"
+                                        value="manual"
+                                    >
+                                    Manual
+                                </label>
+
+                                <div id="manualFeatures" hidden>
+                                    <p>Select the features to use:</p>
+                                    <div id="featureList"></div>
+                                </div>
+                            </fieldset>
+
+                            <div id="manualConfig" hidden>
+
+                                <br>
+
+                                <fieldset>
+                                    <legend>Random Forest Parameters</legend>
+
+                                    <div>
+                                        <label for="n_estimators">
+                                            Number of Estimators:
+                                        </label>
+
+                                        <input
+                                            type="number"
+                                            id="n_estimators"
+                                            name="n_estimators"
+                                            min="1"
+                                            max="1000"
+                                        >
+                                    </div>
+
+                                    <br>
+
+                                    <div>
+                                        <label for="max_depth">
+                                            Max Depth:
+                                        </label>
+
+                                        <input
+                                            type="number"
+                                            id="max_depth"
+                                            name="max_depth"
+                                            min="1"
+                                            max="100"
+                                        >
+                                    </div>
+                                </fieldset>
+
+                            </div>
+                        </div>
+                    </section>
+
+                    <br>
+
+                    <!-- Dataset visualizations -->
+                    <section>
+                        <h3>Dataset Visualizations</h3>
+
+                        <fieldset>
+                            <legend>Select visualizations to generate</legend>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="histograms"
+                                    value="true"
+                                >
+                                Histograms
+                            </label>
+
+                            <br>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="box_plots"
+                                    value="true"
+                                >
+                                Box Plots
+                            </label>
+
+                            <br>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="correlation_heatmap"
+                                    value="true"
+                                >
+                                Correlation Heatmap
+                            </label>
+
+                            <!-- Only shown when a model is selected -->
+                            <div id="modelVisualizationOptions" hidden>
+
+                                <br>
+
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        name="actual_vs_predicted"
+                                        value="true"
+                                    >
+                                    Actual vs Predicted
+                                </label>
+
+                            </div>
+                        </fieldset>
+                    </section>
+
+                    <br>
+
+                    <button type="submit" id="submitJob" disabled>
+                        Submit Dataset Job
+                    </button>
+
+                </form>
+            </div>
+        </section>
+
+        <hr>
+
+        <section>
+            <h2>Jobs</h2>
+
+            {{if .Jobs}}
+                <ul>
+                    {{range .Jobs}}
+                        <li>
+                            <a href="/results?id={{.ID}}">
+                                Job #{{.ID}} — {{.Type}} — {{.Status}}
+                            </a>
+                        </li>
+                    {{end}}
+                </ul>
+            {{else}}
+                <p>No jobs yet.</p>
+            {{end}}
+
+        </section>
+    </main>
+
+    <script src="/static/js/dataset.js"></script>
+
+</body>
+</html>

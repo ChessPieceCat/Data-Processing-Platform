@@ -583,31 +583,31 @@ The project has:
 
 # 23. First Implementation Checklist
 
-- [ ] Create GitHub repository.
-- [ ] Initialize Go module.
-- [ ] Build minimal Go HTTP server.
-- [ ] Create initial HTML interface.
-- [ ] Add Docker Compose.
-- [ ] Run PostgreSQL locally.
-- [ ] Create the first migration.
-- [ ] Create the initial `jobs` table.
-- [ ] Implement basic job creation.
-- [ ] Implement basic job retrieval.
-- [ ] Add CSV upload.
-- [ ] Add safe local file storage.
-- [ ] Create the first dataset worker.
-- [ ] Implement dataset shape analysis.
-- [ ] Implement missing-value analysis.
-- [ ] Implement descriptive statistics.
-- [ ] Implement basic distributions.
-- [ ] Implement correlations where applicable.
-- [ ] Display results in the browser.
-- [ ] Add regression configuration.
-- [ ] Add Random Forest Regressor.
-- [ ] Add automatic feature selection.
-- [ ] Add manual feature selection.
-- [ ] Add useful regression metrics.
-- [ ] Add regression visualization.
+- [x] Create GitHub repository.
+- [x] Initialize Go module.
+- [x] Build minimal Go HTTP server.
+- [x] Create initial HTML interface.
+- [x] Add Docker Compose.
+- [x] Run PostgreSQL locally.
+- [x] Create the first migration.
+- [x] Create the initial `jobs` table.
+- [x] Implement basic job creation.
+- [x] Implement basic job retrieval.
+- [x] Add CSV upload.
+- [x] Add safe local file storage.
+- [x] Create the first dataset worker.
+- [x] Implement dataset shape analysis.
+- [x] Implement missing-value analysis.
+- [x] Implement descriptive statistics.
+- [x] Implement basic distributions.
+- [x] Implement correlations where applicable.
+- [x] Display results in the browser.
+- [x] Add regression configuration.
+- [x] Add Random Forest Regressor.
+- [x] Add automatic feature selection.
+- [x] Add manual feature selection.
+- [x] Add useful regression metrics.
+- [x] Add regression visualization.
 - [ ] Add tests.
 - [ ] Document the first architecture.
 

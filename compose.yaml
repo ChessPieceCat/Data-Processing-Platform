@@ -1,0 +1,31 @@
+volumes:
+  postgres_data:
+
+services:
+  app:
+    build: .
+    ports:
+      - "8082:8082"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: data_platform
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: data_platform
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    ports:
+      - "8083:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin_password
+    depends_on:
+      - db
