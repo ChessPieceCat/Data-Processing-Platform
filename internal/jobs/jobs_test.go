@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
+	redisclient "github.com/redis/go-redis/v9"
 )
 
 // setupTestDatabase runs migrations and returns a database connection
@@ -644,4 +646,64 @@ func TestProcessDatasetJobFailure(t *testing.T) {
 // exposing filesystem path details from the production package.
 func itoa(value int64) string {
 	return fmt.Sprintf("%d", value)
+}
+
+func TestEnqueueJob(t *testing.T) {
+	redisClient := redisclient.NewClient(&redisclient.Options{
+		Addr: "localhost:6379",
+	})
+	defer redisClient.Close()
+
+	ctx := context.Background()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		t.Skipf("Redis is not available: %v", err)
+	}
+
+	jobID := int64(12345)
+
+	if err := EnqueueJob(redisClient, jobID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	messages, err := redisClient.XRange(
+		ctx,
+		"job_queue",
+		"-",
+		"+",
+	).Result()
+	if err != nil {
+		t.Fatalf("failed to read Redis stream: %v", err)
+	}
+
+	var found bool
+
+	for _, message := range messages {
+		value, ok := message.Values["job_id"].(string)
+		if !ok {
+			continue
+		}
+
+		if value == "12345" {
+			found = true
+
+			if err := redisClient.XDel(
+				ctx,
+				"job_queue",
+				message.ID,
+			).Err(); err != nil {
+				t.Logf(
+					"failed to clean up test message %s: %v",
+					message.ID,
+					err,
+				)
+			}
+
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf("expected job_id %d to be added to Redis stream", jobID)
+	}
 }

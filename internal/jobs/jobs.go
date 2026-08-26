@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // CreateJob creates a new job and returns its database-generated ID.
@@ -225,6 +228,7 @@ type Job struct {
 	CompletedAt     *time.Time
 	ErrorMessage    *string
 	ResultReference *string
+	InputReference  *string
 }
 
 func GetJobs(db *sql.DB) ([]Job, error) {
@@ -273,7 +277,7 @@ func GetJob(db *sql.DB, jobID int64) (*Job, error) {
 
 	err := db.QueryRow(
 		`SELECT id, type, status, created_at, started_at, completed_at,
-	        error_message, result_reference
+	        error_message, result_reference, input_reference
 		 FROM jobs
 		 WHERE id = $1`,
 		jobID,
@@ -286,6 +290,7 @@ func GetJob(db *sql.DB, jobID int64) (*Job, error) {
 		&j.CompletedAt,
 		&j.ErrorMessage,
 		&j.ResultReference,
+		&j.InputReference,
 	)
 
 	if err != nil {
@@ -395,6 +400,26 @@ func DeleteOldJobs(db *sql.DB, keep int) error {
 		if err := DeleteJob(db, jobID); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// EnqueueJob adds a job ID to the Redis queue for processing.
+func EnqueueJob(redisClient *redis.Client, jobID int64) error {
+	_, err := redisClient.XAdd(
+		context.Background(),
+		&redis.XAddArgs{
+			Stream: "job_queue",
+			ID:     "*",
+			Values: map[string]interface{}{
+				"job_id": jobID,
+			},
+		},
+	).Result()
+
+	if err != nil {
+		return fmt.Errorf("failed to enqueue job %d: %w", jobID, err)
 	}
 
 	return nil
