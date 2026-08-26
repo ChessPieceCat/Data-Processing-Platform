@@ -16,6 +16,7 @@ import (
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 const MaxUploadSize = 10 << 20 // 10 MiB
@@ -98,7 +99,7 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // DatasetSubmissionHandler handles job submission.
-func DatasetSubmissionHandler(db *sql.DB) http.HandlerFunc {
+func DatasetSubmissionHandler(db *sql.DB, redisClient *redis.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -179,12 +180,25 @@ func DatasetSubmissionHandler(db *sql.DB) http.HandlerFunc {
 
 		log.Printf("Saved dataset configuration for job %d at %s", jobID, configPath)
 
-		// Start the dataset job asynchronously.
-		go func() {
-			if err := jobs.ProcessDatasetJob(db, jobID, filePath, configPath); err != nil {
-				log.Printf("Job %d failed: %v", jobID, err)
+		// Enqueue the job ID in Redis for processing by the worker.
+		if err := jobs.EnqueueJob(redisClient, jobID); err != nil {
+			log.Printf("Error enqueuing job %d: %v", jobID, err)
+
+			if deleteErr := jobs.DeleteJob(db, jobID); deleteErr != nil {
+				log.Printf(
+					"Error cleaning up job %d after enqueue failure: %v",
+					jobID,
+					deleteErr,
+				)
 			}
-		}()
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}

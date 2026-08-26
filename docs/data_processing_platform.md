@@ -608,7 +608,7 @@ The project has:
 - [x] Add manual feature selection.
 - [x] Add useful regression metrics.
 - [x] Add regression visualization.
-- [ ] Add tests.
-- [ ] Document the first architecture.
+- [x] Add tests.
+- [x] Document the first architecture.
 
 **Do not continue into queues, image processing, route optimization, AWS, or Terraform until this checklist has produced a stable first end-to-end workflow.**

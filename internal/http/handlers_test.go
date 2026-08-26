@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,7 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/google/uuid"
+	redisclient "github.com/redis/go-redis/v9"
 )
 
 // TestParseJobID verifies that job IDs are correctly parsed from requests.
@@ -536,3 +541,149 @@ var _ *sql.DB
 // Ensure jobs remains referenced because handler behavior is coupled to the
 // jobs package.
 var _ = jobs.Job{}
+
+// TestDatasetSubmissionHandlerEnqueuesJob verifies that submitting a dataset
+// creates a queued job and adds its ID to the Redis job stream.
+func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
+	db := database.OpenDatabase()
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		t.Skipf("PostgreSQL is not available: %v", err)
+	}
+
+	redisClient := redisclient.NewClient(&redisclient.Options{
+		Addr: "localhost:6379",
+	})
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("Redis is not available: %v", err)
+	}
+
+	uploadID := uuid.New().String()
+	tempPath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+".csv",
+	)
+
+	if err := os.MkdirAll(temporaryUploadDirectory, 0755); err != nil {
+		t.Fatalf("failed to create temporary upload directory: %v", err)
+	}
+
+	if err := os.WriteFile(
+		tempPath,
+		[]byte("temperature,humidity\n20,50\n21,55\n"),
+		0644,
+	); err != nil {
+		t.Fatalf("failed to create temporary dataset: %v", err)
+	}
+	defer os.Remove(tempPath)
+
+	form := url.Values{
+		"uploadID":         {uploadID},
+		"model":            {"none"},
+		"featureSelection": {""},
+		"configType":       {""},
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/submit/dataset",
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := DatasetSubmissionHandler(db, redisClient)
+	handler(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusSeeOther,
+			rec.Code,
+		)
+	}
+
+	// The handler has redirected successfully, so recover the created
+	// job from the database by looking for the most recent dataset job.
+	var jobID int64
+	err := db.QueryRow(`
+		SELECT id
+		FROM jobs
+		WHERE type = 'dataset'
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&jobID)
+
+	if err != nil {
+		t.Fatalf("failed to retrieve created job: %v", err)
+	}
+
+	defer jobs.DeleteJob(db, jobID)
+
+	// Verify the job is still queued.
+	var status string
+	if err := db.QueryRow(
+		`SELECT status FROM jobs WHERE id = $1`,
+		jobID,
+	).Scan(&status); err != nil {
+		t.Fatalf("failed to retrieve job status: %v", err)
+	}
+
+	if status != "queued" {
+		t.Fatalf("expected job status queued, got %q", status)
+	}
+
+	// Find the Redis message containing this job ID.
+	streams, err := redisClient.XRange(
+		context.Background(),
+		"job_queue",
+		"-",
+		"+",
+	).Result()
+
+	if err != nil {
+		t.Fatalf("failed to read Redis stream: %v", err)
+	}
+
+	var found bool
+
+	for _, message := range streams {
+		value, ok := message.Values["job_id"].(string)
+		if !ok {
+			continue
+		}
+
+		if value == fmt.Sprintf("%d", jobID) {
+			found = true
+
+			// Remove the test message so it doesn't affect other tests.
+			if err := redisClient.XDel(
+				context.Background(),
+				"job_queue",
+				message.ID,
+			).Err(); err != nil {
+				t.Logf(
+					"failed to remove test Redis message %s: %v",
+					message.ID,
+					err,
+				)
+			}
+
+			break
+		}
+	}
+
+	if !found {
+		t.Fatalf(
+			"expected Redis stream to contain job_id %d",
+			jobID,
+		)
+	}
+}

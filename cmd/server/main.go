@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"text/template"
@@ -8,6 +9,8 @@ import (
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/worker"
 )
 
 func main() {
@@ -28,6 +31,47 @@ func main() {
 	if err := jobs.DeleteOldJobs(db, 10); err != nil {
 		log.Fatal("Error deleting old jobs:", err)
 	}
+
+	// Open the Redis connection.
+	redisClient := redis.OpenRedis()
+	defer redisClient.Close()
+
+	if err := redis.PingRedis(redisClient); err != nil {
+		log.Fatal(err)
+	}
+
+	// Initialize the Redis consumer group for job processing.
+	if err := redis.InitializeGroup(redisClient); err != nil {
+		log.Fatal(err)
+	}
+
+	// Define the job processing function.
+	processJob := func(jobID int64) error {
+
+		job, err := jobs.GetJob(db, jobID)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve job %d: %w", jobID, err)
+		}
+
+		if job.InputReference == nil {
+			return fmt.Errorf("job %d has no input reference", jobID)
+		}
+
+		configPath := fmt.Sprintf("uploads/%d/config.json", jobID)
+
+		return jobs.ProcessDatasetJob(
+			db,
+			jobID,
+			*job.InputReference,
+			configPath,
+		)
+	}
+
+	// Recover any pending jobs that were not acknowledged due to worker crashes or failures.
+	worker.RecoverPendingJobs(db, redisClient, processJob)
+
+	// Start the worker in a separate goroutine.
+	go worker.RunWorker(db, redisClient, processJob)
 
 	// Serve the index.html file.
 	tmpl, err := template.ParseFiles("web/index.html")
@@ -54,7 +98,7 @@ func main() {
 	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)
 
 	// Handle job submission.
-	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db))
+	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db, redisClient))
 
 	// Start the HTTP server.
 	log.Println("Server is running on http://localhost:8082")

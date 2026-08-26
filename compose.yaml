@@ -1,5 +1,6 @@
 volumes:
   postgres_data:
+  redis_data:
 
 services:
   app:
@@ -18,7 +19,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
 
   pgadmin:
     image: dpage/pgadmin4
@@ -29,3 +30,10 @@ services:
       PGADMIN_DEFAULT_PASSWORD: admin_password
     depends_on:
       - db
+
+  redis:
+    image: redis:8
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
