@@ -16,6 +16,15 @@ func setupWorkerTest(
 ) (*sql.DB, *redis.Client) {
 	t.Helper()
 
+	m := database.RunMigrations()
+	if m == nil {
+		t.Fatal("RunMigrations returned nil")
+	}
+
+	t.Cleanup(func() {
+		database.CloseMigrations(m)
+	})
+
 	db := database.OpenDatabase()
 
 	if err := db.Ping(); err != nil {

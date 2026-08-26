@@ -1,0 +1,13 @@
+{
+  "model": "none",
+  "target": "",
+  "feature_selection": "",
+  "configuration_type": "",
+  "configuration": {},
+  "visualizations": {
+    "histograms": false,
+    "box_plots": false,
+    "correlation_heatmap": false,
+    "actual_vs_predicted": false
+  }
+}
