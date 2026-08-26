@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"text/template"
@@ -48,22 +47,9 @@ func main() {
 	// Define the job processing function.
 	processJob := func(jobID int64) error {
 
-		job, err := jobs.GetJob(db, jobID)
-		if err != nil {
-			return fmt.Errorf("failed to retrieve job %d: %w", jobID, err)
-		}
-
-		if job.InputReference == nil {
-			return fmt.Errorf("job %d has no input reference", jobID)
-		}
-
-		configPath := fmt.Sprintf("uploads/%d/config.json", jobID)
-
-		return jobs.ProcessDatasetJob(
+		return jobs.ProcessJob(
 			db,
 			jobID,
-			*job.InputReference,
-			configPath,
 		)
 	}
 

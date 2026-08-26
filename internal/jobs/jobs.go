@@ -36,20 +36,56 @@ func CreateJob(db *sql.DB, jobType string) (int64, error) {
 	return id, nil
 }
 
-// ProcessDatasetJob manages the lifecycle of a dataset processing job.
-func ProcessDatasetJob(
+type JobProcessor func(
+	filePath string,
+	jobID int64,
+	configPath string,
+) (string, error)
+
+var processors = map[string]JobProcessor{
+	"dataset": runDatasetProcessor,
+	"image":   runImageProcessor,
+	"route":   runRouteProcessor,
+}
+
+// ProcessJob manages the lifecycle of a job.
+func ProcessJob(
 	db *sql.DB,
 	jobID int64,
-	filePath string,
-	configPath string,
 ) error {
+
+	job, err := GetJob(db, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve job %d: %w", jobID, err)
+	}
+
+	if job.InputReference == nil {
+		return fmt.Errorf("job %d has no input reference", jobID)
+	}
+
+	configPath := fmt.Sprintf("uploads/%d/config.json", jobID)
+
 	// Mark the job as processing.
 	if err := startJob(db, jobID); err != nil {
 		return err
 	}
 
-	// Run the Python dataset processor.
-	resultPath, err := runDatasetProcessor(filePath, jobID, configPath)
+	var resultPath string
+
+	processor, ok := processors[job.Type]
+	if !ok {
+		err = fmt.Errorf(
+			"unsupported job type: %s",
+			job.Type,
+		)
+	} else {
+		resultPath, err = processor(
+			*job.InputReference,
+			jobID,
+			configPath,
+		)
+	}
+
 	if err != nil {
 		if failErr := failJob(db, jobID, err.Error()); failErr != nil {
 			log.Printf("Error marking job %d as failed: %v", jobID, failErr)
@@ -144,6 +180,24 @@ func runDatasetProcessor(
 	}
 
 	return resultPath, nil
+}
+
+// runImageProcessor runs the Python image processor.
+func runImageProcessor(
+	_ string,
+	_ int64,
+	_ string,
+) (string, error) {
+	return "", fmt.Errorf("image processing is not implemented")
+}
+
+// runRouteProcessor runs the Python route processor.
+func runRouteProcessor(
+	_ string,
+	_ int64,
+	_ string,
+) (string, error) {
+	return "", fmt.Errorf("route processing is not implemented")
 }
 
 // saveResultReference stores the result file reference for a job.
