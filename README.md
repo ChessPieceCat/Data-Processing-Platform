@@ -2,7 +2,7 @@
 
 A locally hosted web application for submitting data-processing jobs, tracking their status, and viewing or downloading generated results.
 
-The project is currently in its first implementation. The initial job type is **dataset processing**; additional job types and models are planned for later iterations.
+The project is currently in its first implementation. The initial implemented job type is **dataset processing**; additional job types and machine-learning models are planned for later iterations.
 
 ## Current Features
 
@@ -50,7 +50,7 @@ Modeling currently supports the Random Forest Regressor. Additional models and j
 
 ## Architecture
 
-The application currently uses Go for the web server, job management, Redis queueing, and worker execution; PostgreSQL for persistent job state; and Python for dataset analysis and machine-learning processing.
+The application currently uses Go for the web server, job management, job dispatching, Redis queueing, and worker execution; PostgreSQL for persistent job state; and Python for dataset analysis and machine-learning processing.
 
 ```text
 Browser
@@ -66,16 +66,27 @@ Go HTTP server
           Go Worker
              |
              v
-      Python dataset processor
+         ProcessJob
              |
-             +---- pandas
-             +---- scikit-learn
-             +---- matplotlib / seaborn
+       +-----+-----+
+       |           |
+       v           v
+Dataset       Future job
+processor     processors
+   |
+   v
+Python dataset processor
+   |
+   +---- pandas
+   +---- scikit-learn
+   +---- matplotlib / seaborn
 ```
 
-The Go application creates a job in PostgreSQL and enqueues a message in a Redis Stream. A worker consumes jobs from the stream and invokes the Python dataset processor.
+The Go application creates a job in PostgreSQL and enqueues its job ID in a Redis Stream. A worker consumes messages from the stream and passes the job ID to the generic job-processing layer.
 
-Redis Streams use at-least-once delivery semantics. A job is acknowledged after processing has completed successfully or after a permanent failure has been recorded. Pending messages can be recovered when a worker is restarted.
+`ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, and dispatches the job to the appropriate processor based on its type. Job-specific processor functions are responsible for performing the domain-specific work and producing result artifacts.
+
+Redis Streams use at-least-once delivery semantics. The worker acknowledges messages after processing has completed or a permanent processing failure has been recorded. Pending messages can be recovered when a worker is restarted.
 
 PostgreSQL remains responsible for persistent job state and metadata, while Redis is responsible for transporting work between the API and worker.
 
@@ -94,7 +105,7 @@ internal/http/
     HTTP handlers, result models, and templates
 
 internal/jobs/
-    Job lifecycle and dataset configuration
+    Job lifecycle, job dispatching, and dataset configuration
 
 internal/redis/
     Redis connection and Stream configuration
@@ -171,7 +182,7 @@ http://localhost:8082
 
 The web interface allows a CSV to be inspected before submitting a dataset job. For modeling jobs, the interface allows a target, feature-selection mode, Random Forest configuration, and requested visualizations to be selected.
 
-When a job is submitted, the API creates the job record and places a message on the Redis Stream. The worker consumes the job and performs the dataset processing asynchronously.
+When a job is submitted, the API creates the job record and places a message containing the job ID on the Redis Stream. The worker consumes the message and passes the job to `ProcessJob` for asynchronous processing.
 
 ## Testing
 
@@ -188,7 +199,7 @@ cd processors/dataset
 pytest -v
 ```
 
-The GitHub Actions workflow runs both test suites and builds the Go server.
+The GitHub Actions workflow runs the automated Go and Python test suites and builds the Go server.
 
 ## Results and Artifacts
 
@@ -219,13 +230,15 @@ Dataset and model result JSON files can also be downloaded from the results page
 
 This repository represents the first implementation of the platform and is focused on establishing a complete dataset-processing workflow.
 
-The current implementation includes asynchronous processing through Redis Streams, but the worker architecture is still intentionally simple. Additional worker types and more general worker abstractions will be developed in later phases.
+The current architecture separates generic job orchestration from domain-specific processing. Redis and the worker handle asynchronous job delivery, `ProcessJob` handles the common job lifecycle and dispatching, and individual processors handle job-specific execution.
+
+Only dataset processing is currently implemented. Additional job types can be added through the job-processing registry without changing the Redis queue or worker architecture.
 
 Planned future work includes:
 
 - additional machine-learning models
-- additional job types and workers
-- generic worker architecture
+- additional job types and processors
+- further worker and processing abstractions where shared behavior warrants them
 - improved concurrency and reliability handling
 - broader integration testing
 - deployment and infrastructure work

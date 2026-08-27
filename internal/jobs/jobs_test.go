@@ -441,9 +441,9 @@ func TestRunDatasetProcessorMissingInput(t *testing.T) {
 	}
 }
 
-// TestProcessDatasetJobSuccess verifies the complete successful lifecycle
+// TestProcessJobSuccess verifies the complete successful lifecycle
 // of a dataset processing job.
-func TestProcessDatasetJobSuccess(t *testing.T) {
+func TestProcessJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	jobID := createTestJob(t, db)
@@ -451,12 +451,6 @@ func TestProcessDatasetJobSuccess(t *testing.T) {
 	jobDirectory := filepath.Join(
 		"uploads",
 		fmt.Sprintf("%d", jobID),
-	)
-
-	// Use the actual job ID to create the expected job directory.
-	jobDirectory = filepath.Join(
-		"uploads",
-		itoa(jobID),
 	)
 
 	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
@@ -519,14 +513,23 @@ func TestProcessDatasetJobSuccess(t *testing.T) {
 		)
 	}
 
-	if err := ProcessDatasetJob(
+	_, err := db.Exec(
+		`UPDATE jobs
+     SET input_reference = $1
+     WHERE id = $2`,
+		inputPath,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf("failed to set input reference: %v", err)
+	}
+
+	if err := ProcessJob(
 		db,
 		jobID,
-		inputPath,
-		configPath,
 	); err != nil {
 		t.Fatalf(
-			"ProcessDatasetJob failed: %v",
+			"ProcessJob failed: %v",
 			err,
 		)
 	}
@@ -594,22 +597,32 @@ func TestProcessDatasetJobSuccess(t *testing.T) {
 	}
 }
 
-// TestProcessDatasetJobFailure verifies that a processor failure marks the
-// job as failed and preserves the processor error.
-func TestProcessDatasetJobFailure(t *testing.T) {
+// TestProcessJobFailure verifies that a job fails gracefully when the input file is missing.
+func TestProcessJobFailure(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	jobID := createTestJob(t, db)
 
-	err := ProcessDatasetJob(
-		db,
+	inputReference := "does-not-exist.csv"
+
+	_, err := db.Exec(
+		`UPDATE jobs
+         SET input_reference = $1
+         WHERE id = $2`,
+		inputReference,
 		jobID,
-		"does-not-exist.csv",
-		"does-not-exist-config.json",
 	)
+	if err != nil {
+		t.Fatalf(
+			"failed to set input reference: %v",
+			err,
+		)
+	}
+
+	err = ProcessJob(db, jobID)
 
 	if err == nil {
-		t.Fatal("expected ProcessDatasetJob to fail")
+		t.Fatal("expected ProcessJob to fail")
 	}
 
 	job, getErr := GetJob(db, jobID)
@@ -642,12 +655,30 @@ func TestProcessDatasetJobFailure(t *testing.T) {
 	}
 }
 
-// itoa is kept local to tests so job-directory construction does not require
-// exposing filesystem path details from the production package.
-func itoa(value int64) string {
-	return fmt.Sprintf("%d", value)
+// TestProcessJobMissingInput verifies that a job without an input reference fails gracefully.
+func TestProcessJobMissingInput(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID := createTestJob(t, db)
+
+	err := ProcessJob(db, jobID)
+
+	if err == nil {
+		t.Fatal("expected ProcessJob to fail")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"has no input reference",
+	) {
+		t.Fatalf(
+			"expected missing input reference error, got %v",
+			err,
+		)
+	}
 }
 
+// TestEnqueueJob verifies that a job ID is correctly added to the Redis stream.
 func TestEnqueueJob(t *testing.T) {
 	redisClient := redisclient.NewClient(&redisclient.Options{
 		Addr: "localhost:6379",
@@ -705,5 +736,56 @@ func TestEnqueueJob(t *testing.T) {
 
 	if !found {
 		t.Fatalf("expected job_id %d to be added to Redis stream", jobID)
+	}
+}
+
+// TestProcessJobUnsupportedType verifies that a job with an unsupported type fails gracefully.
+func TestProcessJobUnsupportedType(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID := createTestJob(t, db)
+
+	_, err := db.Exec(
+		`UPDATE jobs
+     SET type = $1,
+         input_reference = $2
+     WHERE id = $3`,
+		"unsupported",
+		"test-input.csv",
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf("failed to update job: %v", err)
+	}
+
+	err = ProcessJob(db, jobID)
+
+	if err == nil {
+		t.Fatal("expected ProcessJob to fail")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"unsupported job type",
+	) {
+		t.Fatalf(
+			"expected unsupported job type error, got %v",
+			err,
+		)
+	}
+
+	job, getErr := GetJob(db, jobID)
+	if getErr != nil {
+		t.Fatalf(
+			"GetJob failed: %v",
+			getErr,
+		)
+	}
+
+	if job.Status != "failed" {
+		t.Fatalf(
+			"expected status failed, got %q",
+			job.Status,
+		)
 	}
 }

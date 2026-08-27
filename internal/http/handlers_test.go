@@ -545,6 +545,15 @@ var _ = jobs.Job{}
 // TestDatasetSubmissionHandlerEnqueuesJob verifies that submitting a dataset
 // creates a queued job and adds its ID to the Redis job stream.
 func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
+	m := database.RunMigrations()
+	if m == nil {
+		t.Fatal("RunMigrations returned nil")
+	}
+
+	t.Cleanup(func() {
+		database.CloseMigrations(m)
+	})
+
 	db := database.OpenDatabase()
 	defer db.Close()
 
@@ -613,12 +622,14 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 	// The handler has redirected successfully, so recover the created
 	// job from the database by looking for the most recent dataset job.
 	var jobID int64
+
 	err := db.QueryRow(`
-		SELECT id
-		FROM jobs
-		WHERE type = 'dataset'
-		ORDER BY id DESC
-		LIMIT 1
+    	SELECT id
+    	FROM jobs
+    	WHERE type = 'dataset'
+      	AND input_reference LIKE 'uploads/%/dataset.csv'
+    	ORDER BY id DESC
+    	LIMIT 1
 	`).Scan(&jobID)
 
 	if err != nil {
