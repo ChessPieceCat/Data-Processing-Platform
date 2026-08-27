@@ -53,6 +53,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install pytest
           pip install -r processors/dataset/requirements.txt
           pip install -r processors/image/requirements.txt
 
@@ -63,6 +64,7 @@ jobs:
         run: |
           pytest -v processors/dataset
           pytest -v processors/image
+          pytest -v processors/route
 
       - name: Build Go server
         run: go build ./cmd/server

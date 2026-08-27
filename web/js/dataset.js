@@ -29,6 +29,21 @@ const convertFormatCheckbox = document.getElementById("convertFormat");
 const formatOptions = document.getElementById("formatOptions");
 const outputFormat = document.getElementById("outputFormat");
 
+// Route processing elements.
+const routeFileInput = document.getElementById("routeFile");
+const distanceFileInput = document.getElementById("distanceFile");
+const routeUploadID = document.getElementById("routeUploadID");
+const routeOptions = document.getElementById("routeOptions");
+const startLocationSelect = document.getElementById("startLocation");
+const endLocationSelect = document.getElementById("endLocation");
+const submitRouteJobButton = document.getElementById(
+    "submitRouteJob"
+);
+
+
+// ------------------------------
+// Image processing
+// ------------------------------
 
 // Upload the selected image and show processing options.
 if (imageFileInput && imageOptions) {
@@ -64,6 +79,7 @@ if (imageFileInput && imageOptions) {
         } catch (error) {
             imageOptions.hidden = true;
             imageFileInput.value = "";
+            imageUploadID.value = "";
 
             alert(`Error uploading image: ${error.message}`);
         }
@@ -86,7 +102,8 @@ if (compressImageCheckbox && compressionOptions) {
     });
 }
 
-// Update the visibility of compression options based on the selected output format.
+
+// Update compression options when output format changes.
 if (outputFormat) {
     outputFormat.addEventListener(
         "change",
@@ -104,28 +121,8 @@ if (convertFormatCheckbox && formatOptions) {
 }
 
 
-// Establish the correct initial state when the page loads.
-updateModelOptions();
-updateFeatureOptions();
-
-if (imageOptions) {
-    imageOptions.hidden =
-        !imageFileInput || imageFileInput.files.length === 0;
-}
-
-if (resizeOptions) {
-    resizeOptions.hidden =
-        !resizeImageCheckbox || !resizeImageCheckbox.checked;
-}
-
-if (formatOptions) {
-    formatOptions.hidden =
-        !convertFormatCheckbox || !convertFormatCheckbox.checked;
-}
-
-updateImageCompressionOptions();
-
-// Update the visibility of compression options based on the selected output format.
+// Update the visibility of compression options based on the
+// selected output format and original image format.
 function updateImageCompressionOptions() {
     if (!compressionOptions || !compressImageCheckbox) {
         return;
@@ -147,7 +144,10 @@ function updateImageCompressionOptions() {
         outputFormat &&
         outputFormat.value === "png";
 
-    if (originalIsPng && !convertFormatCheckbox.checked) {
+    if (
+        originalIsPng &&
+        !convertFormatCheckbox.checked
+    ) {
         compressionOptions.hidden = true;
         return;
     }
@@ -158,4 +158,339 @@ function updateImageCompressionOptions() {
     }
 
     compressionOptions.hidden = false;
+}
+
+
+// ------------------------------
+// Route processing
+// ------------------------------
+
+// Upload the route and distance CSV files.
+if (
+    routeFileInput &&
+    distanceFileInput &&
+    routeOptions
+) {
+    const updateRouteUpload = async () => {
+        const routeFile = routeFileInput.files[0];
+        const distanceFile = distanceFileInput.files[0];
+
+        routeUploadID.value = "";
+        routeOptions.hidden = true;
+
+        if (
+            !routeFile ||
+            !distanceFile
+        ) {
+            updateRouteSubmitButton();
+            return;
+        }
+
+        if (
+            routeFile.type &&
+            routeFile.type !== "text/csv" &&
+            !routeFile.name.toLowerCase().endsWith(".csv")
+        ) {
+            alert("The route file must be a CSV file.");
+            routeFileInput.value = "";
+            updateRouteSubmitButton();
+            return;
+        }
+
+        if (
+            distanceFile.type &&
+            distanceFile.type !== "text/csv" &&
+            !distanceFile.name.toLowerCase().endsWith(".csv")
+        ) {
+            alert(
+                "The distance table file must be a CSV file."
+            );
+            distanceFileInput.value = "";
+            updateRouteSubmitButton();
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+
+            formData.append("routeFile", routeFile);
+            formData.append("distanceFile", distanceFile);
+
+            const response = await fetch("/upload/route", {
+                method: "POST",
+                body: formData
+            });
+
+            if (!response.ok) {
+                const message = await response.text();
+                throw new Error(message);
+            }
+
+            const data = await response.json();
+
+            routeUploadID.value = data.upload_id;
+
+            await populateRouteLocations(routeFile);
+
+            routeOptions.hidden = false;
+            updateRouteSubmitButton();
+        } catch (error) {
+            routeUploadID.value = "";
+            routeOptions.hidden = true;
+
+            alert(
+                `Error uploading route files: ${error.message}`
+            );
+
+            routeFileInput.value = "";
+            distanceFileInput.value = "";
+        }
+    };
+
+    routeFileInput.addEventListener(
+        "change",
+        updateRouteUpload
+    );
+
+    distanceFileInput.addEventListener(
+        "change",
+        updateRouteUpload
+    );
+}
+
+
+// Read the route CSV and populate the start/end selectors.
+async function populateRouteLocations(file) {
+    if (
+        !startLocationSelect ||
+        !endLocationSelect
+    ) {
+        return;
+    }
+
+    const text = await file.text();
+
+    const rows = parseCSV(text);
+
+    if (rows.length < 2) {
+        throw new Error(
+            "The route CSV contains no locations."
+        );
+    }
+
+    const header = rows[0];
+
+    const nameIndex = header.findIndex(
+        (column) => column.trim() === "name"
+    );
+
+    if (nameIndex === -1) {
+        throw new Error(
+            "The route CSV is missing the required 'name' column."
+        );
+    }
+
+    const locationNames = [];
+
+    for (let index = 1; index < rows.length; index++) {
+        const row = rows[index];
+
+        if (!row.length) {
+            continue;
+        }
+
+        const name = row[nameIndex]?.trim();
+
+        if (name && !locationNames.includes(name)) {
+            locationNames.push(name);
+        }
+    }
+
+    if (locationNames.length === 0) {
+        throw new Error(
+            "The route CSV contains no locations."
+        );
+    }
+
+    startLocationSelect.replaceChildren();
+
+    const startPlaceholder =
+        document.createElement("option");
+
+    startPlaceholder.value = "";
+    startPlaceholder.textContent =
+        "Select a starting location";
+
+    startLocationSelect.appendChild(
+        startPlaceholder
+    );
+
+    endLocationSelect.replaceChildren();
+
+    const endDefault =
+        document.createElement("option");
+
+    endDefault.value = "";
+    endDefault.textContent =
+        "Same as starting location";
+
+    endLocationSelect.appendChild(
+        endDefault
+    );
+
+    for (const name of locationNames) {
+        const startOption =
+            document.createElement("option");
+
+        startOption.value = name;
+        startOption.textContent = name;
+
+        startLocationSelect.appendChild(
+            startOption
+        );
+
+        const endOption =
+            document.createElement("option");
+
+        endOption.value = name;
+        endOption.textContent = name;
+
+        endLocationSelect.appendChild(
+            endOption
+        );
+    }
+}
+
+
+// Basic CSV parser that handles quoted fields.
+function parseCSV(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let insideQuotes = false;
+
+    for (let index = 0; index < text.length; index++) {
+        const character = text[index];
+
+        if (character === '"') {
+            if (
+                insideQuotes &&
+                text[index + 1] === '"'
+            ) {
+                field += '"';
+                index++;
+            } else {
+                insideQuotes = !insideQuotes;
+            }
+
+            continue;
+        }
+
+        if (character === "," && !insideQuotes) {
+            row.push(field);
+            field = "";
+            continue;
+        }
+
+        if (
+            (character === "\n" ||
+                character === "\r") &&
+            !insideQuotes
+        ) {
+            if (
+                character === "\r" &&
+                text[index + 1] === "\n"
+            ) {
+                index++;
+            }
+
+            row.push(field);
+            field = "";
+
+            if (row.some(
+                (value) => value.trim() !== ""
+            )) {
+                rows.push(row);
+            }
+
+            row = [];
+            continue;
+        }
+
+        field += character;
+    }
+
+    if (field !== "" || row.length > 0) {
+        row.push(field);
+
+        if (row.some(
+            (value) => value.trim() !== ""
+        )) {
+            rows.push(row);
+        }
+    }
+
+    return rows;
+}
+
+
+// Update route submission button state.
+function updateRouteSubmitButton() {
+    if (!submitRouteJobButton) {
+        return;
+    }
+
+    const ready =
+        routeUploadID &&
+        routeUploadID.value !== "" &&
+        startLocationSelect &&
+        startLocationSelect.value !== "";
+
+    submitRouteJobButton.disabled = !ready;
+}
+
+
+// Enable or disable the route submit button when
+// the starting location changes.
+if (startLocationSelect) {
+    startLocationSelect.addEventListener(
+        "change",
+        updateRouteSubmitButton
+    );
+}
+
+
+// ------------------------------
+// Initial state
+// ------------------------------
+
+updateModelOptions();
+updateFeatureOptions();
+
+if (imageOptions) {
+    imageOptions.hidden =
+        !imageFileInput ||
+        imageFileInput.files.length === 0;
+}
+
+if (resizeOptions) {
+    resizeOptions.hidden =
+        !resizeImageCheckbox ||
+        !resizeImageCheckbox.checked;
+}
+
+if (formatOptions) {
+    formatOptions.hidden =
+        !convertFormatCheckbox ||
+        !convertFormatCheckbox.checked;
+}
+
+updateImageCompressionOptions();
+
+if (routeOptions) {
+    routeOptions.hidden = true;
+}
+
+if (submitRouteJobButton) {
+    submitRouteJobButton.disabled = true;
 }

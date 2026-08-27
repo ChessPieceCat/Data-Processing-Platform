@@ -85,12 +85,14 @@ func main() {
 	// Handle dataset inspection.
 	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)
 
-	// handle image upload
+	// handle uploads
 	http.HandleFunc("/upload/image", apphttp.ImageUploadHandler)
+	http.HandleFunc("/upload/route", apphttp.RouteUploadHandler)
 
 	// Handle job submission.
 	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db, redisClient))
 	http.HandleFunc("/submit/image", apphttp.ImageSubmissionHandler(db, redisClient))
+	http.HandleFunc("/submit/route", apphttp.RouteSubmissionHandler(db, redisClient))
 
 	// Start the HTTP server.
 	log.Println("Server is running on http://localhost:8082")

@@ -1101,3 +1101,330 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 		)
 	}
 }
+
+// TestCreateRouteJob verifies that route jobs can be created through
+// the generic job creation mechanism.
+func TestCreateRouteJob(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID, err := CreateJob(
+		db,
+		"route",
+	)
+	if err != nil {
+		t.Fatalf(
+			"CreateJob failed for route job: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		_ = DeleteJob(db, jobID)
+	})
+
+	job, err := GetJob(
+		db,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"GetJob failed: %v",
+			err,
+		)
+	}
+
+	if job.Type != "route" {
+		t.Fatalf(
+			"expected job type route, got %q",
+			job.Type,
+		)
+	}
+
+	if job.Status != "queued" {
+		t.Fatalf(
+			"expected status queued, got %q",
+			job.Status,
+		)
+	}
+}
+
+// TestFindRouteProcessor verifies that the generic processor lookup resolves
+// the route processor.
+func TestFindRouteProcessor(t *testing.T) {
+	processorPath, err := findProcessor("route")
+	if err != nil {
+		t.Fatalf(
+			"findProcessor failed for route: %v",
+			err,
+		)
+	}
+
+	expectedSuffix := filepath.Join(
+		"processors",
+		"route",
+		"main.py",
+	)
+
+	if !strings.HasSuffix(
+		processorPath,
+		expectedSuffix,
+	) {
+		t.Fatalf(
+			"expected processor path to end with %q, got %q",
+			expectedSuffix,
+			processorPath,
+		)
+	}
+
+	if _, err := os.Stat(processorPath); err != nil {
+		t.Fatalf(
+			"expected route processor to exist: %v",
+			err,
+		)
+	}
+}
+
+// TestProcessRouteJobSuccess verifies that the shared ProcessJob lifecycle
+// successfully dispatches a route job to the route processor.
+func TestProcessRouteJobSuccess(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID, err := CreateJob(
+		db,
+		"route",
+	)
+	if err != nil {
+		t.Fatalf(
+			"CreateJob failed: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		_ = DeleteJob(db, jobID)
+	})
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		fmt.Sprintf("%d", jobID),
+	)
+
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create route job directory: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		_ = os.RemoveAll(jobDirectory)
+	})
+
+	routePath := filepath.Join(
+		jobDirectory,
+		"route.csv",
+	)
+
+	distancePath := filepath.Join(
+		jobDirectory,
+		"distances.csv",
+	)
+
+	configPath := filepath.Join(
+		jobDirectory,
+		"config.json",
+	)
+
+	routeData :=
+		"id,name,demand,priority,window_start,window_end\n" +
+			"1,Warehouse,0,0,08:00,17:00\n" +
+			"2,Customer A,10,1,08:00,17:00\n"
+
+	distanceData :=
+		"location,Warehouse,Customer A\n" +
+			"Warehouse,0,10\n" +
+			"Customer A,10,0\n"
+
+	configData := `{
+		"start_location": "Warehouse",
+		"end_location": "Warehouse",
+		"optimization": {
+			"algorithm": "nearest_neighbor_2opt"
+		},
+		"constraints": {
+			"max_distance": 100.0,
+			"max_stops": 10
+		}
+	}`
+
+	if err := os.WriteFile(
+		routePath,
+		[]byte(routeData),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write route CSV: %v",
+			err,
+		)
+	}
+
+	if err := os.WriteFile(
+		distancePath,
+		[]byte(distanceData),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write distance CSV: %v",
+			err,
+		)
+	}
+
+	if err := os.WriteFile(
+		configPath,
+		[]byte(configData),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write route config: %v",
+			err,
+		)
+	}
+
+	if _, err := db.Exec(
+		`UPDATE jobs
+		 SET input_reference = $1
+		 WHERE id = $2`,
+		routePath,
+		jobID,
+	); err != nil {
+		t.Fatalf(
+			"failed to set route input reference: %v",
+			err,
+		)
+	}
+
+	if err := ProcessJob(
+		db,
+		jobID,
+	); err != nil {
+		t.Fatalf(
+			"ProcessJob failed for route job: %v",
+			err,
+		)
+	}
+
+	job, err := GetJob(
+		db,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"GetJob failed: %v",
+			err,
+		)
+	}
+
+	if job.Status != "completed" {
+		t.Fatalf(
+			"expected status completed, got %q",
+			job.Status,
+		)
+	}
+
+	if job.StartedAt == nil {
+		t.Fatal(
+			"expected StartedAt to be set",
+		)
+	}
+
+	if job.CompletedAt == nil {
+		t.Fatal(
+			"expected CompletedAt to be set",
+		)
+	}
+
+	if job.ResultReference == nil {
+		t.Fatal(
+			"expected ResultReference to be set",
+		)
+	}
+
+	if _, err := os.Stat(
+		*job.ResultReference,
+	); err != nil {
+		t.Fatalf(
+			"expected route result file to exist: %v",
+			err,
+		)
+	}
+
+	resultData, err := os.ReadFile(
+		*job.ResultReference,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to read route result file: %v",
+			err,
+		)
+	}
+
+	var result map[string]interface{}
+
+	if err := json.Unmarshal(
+		resultData,
+		&result,
+	); err != nil {
+		t.Fatalf(
+			"route result file contains invalid JSON: %v",
+			err,
+		)
+	}
+
+	if result["start_location"] != "Warehouse" {
+		t.Fatalf(
+			"expected start_location Warehouse, got %v",
+			result["start_location"],
+		)
+	}
+
+	if result["end_location"] != "Warehouse" {
+		t.Fatalf(
+			"expected end_location Warehouse, got %v",
+			result["end_location"],
+		)
+	}
+
+	if result["algorithm"] != "nearest_neighbor_2opt" {
+		t.Fatalf(
+			"expected nearest_neighbor_2opt algorithm, got %v",
+			result["algorithm"],
+		)
+	}
+
+	if result["feasible"] != true {
+		t.Fatal(
+			"expected route result to be feasible",
+		)
+	}
+
+	if result["initial_distance"] == nil {
+		t.Fatal(
+			"expected initial_distance in route results",
+		)
+	}
+
+	if result["optimized_distance"] == nil {
+		t.Fatal(
+			"expected optimized_distance in route results",
+		)
+	}
+
+	if result["runtime_seconds"] == nil {
+		t.Fatal(
+			"expected runtime_seconds in route results",
+		)
+	}
+}

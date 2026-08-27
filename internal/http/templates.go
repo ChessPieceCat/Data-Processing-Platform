@@ -522,18 +522,23 @@ var ImageResultsTemplate = template.Must(
 </html>`),
 )
 
-var RouteResultsTemplate = template.Must(template.New("route_results").Parse(`<!DOCTYPE html>
+var RouteResultsTemplate = template.Must(
+	template.New("route_results").Parse(`<!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Route Results for Job #{{.Job.ID}}</title>
 </head>
+
 <body>
+
     <h1>Route Results for Job #{{.Job.ID}}</h1>
 
     <section>
         <h2>Job Information</h2>
+
         <dl>
             <dt>Type</dt>
             <dd>{{.Job.Type}}</dd>
@@ -564,50 +569,112 @@ var RouteResultsTemplate = template.Must(template.New("route_results").Parse(`<!
     {{end}}
 
     {{if .RouteResults}}
+
     <section>
-        <h2>Route</h2>
-        <p>Route results will be displayed here.</p>
+        <h2>Route Configuration</h2>
+
+        <dl>
+            <dt>Starting Location</dt>
+            <dd>{{.RouteResults.StartLocation}}</dd>
+
+            <dt>Ending Location</dt>
+            <dd>{{.RouteResults.EndLocation}}</dd>
+
+            <dt>Algorithm</dt>
+            <dd>{{.RouteResults.Algorithm}}</dd>
+
+            <dt>2-opt Applied</dt>
+            <dd>{{.RouteResults.TwoOptApplied}}</dd>
+        </dl>
     </section>
 
     <section>
-        <h2>Locations</h2>
-        <p>Location and start/end information will be displayed here.</p>
+        <h2>Initial Route</h2>
+
+        <ol>
+            {{range .RouteResults.InitialRoute}}
+            <li>{{.}}</li>
+            {{end}}
+        </ol>
+
+        <p>
+            <strong>Initial Distance:</strong>
+            {{.RouteResults.InitialDistance}}
+        </p>
+    </section>
+
+    <section>
+        <h2>Optimized Route</h2>
+
+        <ol>
+            {{range .RouteResults.OptimizedRoute}}
+            <li>{{.}}</li>
+            {{end}}
+        </ol>
+
+        <p>
+            <strong>Optimized Distance:</strong>
+            {{.RouteResults.OptimizedDistance}}
+        </p>
+    </section>
+
+    <section>
+        <h2>Optimization Results</h2>
+
+        <dl>
+            <dt>Distance Improvement</dt>
+            <dd>{{.RouteResults.DistanceImprovement}}</dd>
+
+            <dt>Improvement Percentage</dt>
+            <dd>{{.RouteResults.ImprovementPercentage}}%</dd>
+        </dl>
     </section>
 
     <section>
         <h2>Constraints</h2>
-        <p>Applied routing constraints will be displayed here.</p>
-    </section>
 
-    <section>
-        <h2>Optimization</h2>
-        <p>Optimization results, including 2-opt improvements, will be displayed here.</p>
+        <dl>
+            <dt>Feasible</dt>
+            <dd>{{.RouteResults.Feasible}}</dd>
+        </dl>
     </section>
 
     <section>
         <h2>Performance</h2>
-        <p>Algorithm and runtime information will be displayed here.</p>
-    </section>
 
-    <section>
-        <h2>Statistics</h2>
-        <p>Route statistics and optimization metrics will be displayed here.</p>
+        <dl>
+            <dt>Algorithm</dt>
+            <dd>{{.RouteResults.Algorithm}}</dd>
+
+            <dt>2-opt Applied</dt>
+            <dd>{{.RouteResults.TwoOptApplied}}</dd>
+
+            <dt>Runtime</dt>
+            <dd>{{.RouteResults.RuntimeSeconds}} seconds</dd>
+        </dl>
     </section>
 
     {{else}}
+
         {{if eq .Job.Status "processing"}}
         <p>The route is still being processed.</p>
+
         {{else if eq .Job.Status "queued"}}
         <p>The job is waiting to be processed.</p>
+
         {{else if eq .Job.Status "failed"}}
         <p>Route processing failed.</p>
+
         {{else}}
         <p>No route results are currently available.</p>
         {{end}}
+
     {{end}}
 
     <p>
         <a href="/">Back to jobs</a>
     </p>
+
 </body>
-</html>`))
+</html>`),
+)

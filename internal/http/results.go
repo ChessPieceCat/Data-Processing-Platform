@@ -56,7 +56,7 @@ type ResultsPage struct {
 	ModelResults         *ModelResults
 	VisualizationResults *VisualizationResults
 	ImageResults         *ImageResults
-	// RouteResults         *RouteResults
+	RouteResults         *RouteResults
 }
 
 type ModelResults struct {
@@ -104,4 +104,19 @@ type CompressionInfo struct {
 	OriginalSize     int64   `json:"original_size"`
 	ResultSize       int64   `json:"result_size"`
 	CompressionRatio float64 `json:"compression_ratio"`
+}
+
+type RouteResults struct {
+	InitialRoute          []string `json:"initial_route"`
+	OptimizedRoute        []string `json:"optimized_route"`
+	InitialDistance       float64  `json:"initial_distance"`
+	OptimizedDistance     float64  `json:"optimized_distance"`
+	DistanceImprovement   float64  `json:"distance_improvement"`
+	ImprovementPercentage float64  `json:"improvement_percentage"`
+	StartLocation         string   `json:"start_location"`
+	EndLocation           string   `json:"end_location"`
+	Algorithm             string   `json:"algorithm"`
+	TwoOptApplied         bool     `json:"two_opt_applied"`
+	RuntimeSeconds        float64  `json:"runtime_seconds"`
+	Feasible              bool     `json:"feasible"`
 }

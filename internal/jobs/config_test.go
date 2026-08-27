@@ -32,19 +32,32 @@ func TestSaveDatasetConfig(t *testing.T) {
 
 	jobDirectory := filepath.Join("uploads", "12345")
 
-	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
-		t.Fatalf("failed to create test job directory: %v", err)
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create test job directory: %v",
+			err,
+		)
 	}
+
 	t.Cleanup(func() {
 		os.RemoveAll(jobDirectory)
 	})
 
 	path, err := SaveDatasetConfig(config, jobID)
 	if err != nil {
-		t.Fatalf("SaveDatasetConfig failed: %v", err)
+		t.Fatalf(
+			"SaveDatasetConfig failed: %v",
+			err,
+		)
 	}
 
-	expectedPath := filepath.Join(jobDirectory, "config.json")
+	expectedPath := filepath.Join(
+		jobDirectory,
+		"config.json",
+	)
 
 	if path != expectedPath {
 		t.Fatalf(
@@ -56,16 +69,28 @@ func TestSaveDatasetConfig(t *testing.T) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("failed to read saved config: %v", err)
+		t.Fatalf(
+			"failed to read saved config: %v",
+			err,
+		)
 	}
 
 	var saved DatasetConfig
 
-	if err := json.Unmarshal(data, &saved); err != nil {
-		t.Fatalf("saved config contains invalid JSON: %v", err)
+	if err := json.Unmarshal(
+		data,
+		&saved,
+	); err != nil {
+		t.Fatalf(
+			"saved config contains invalid JSON: %v",
+			err,
+		)
 	}
 
-	if !reflect.DeepEqual(saved, config) {
+	if !reflect.DeepEqual(
+		saved,
+		config,
+	) {
 		t.Fatalf(
 			"saved configuration does not match original\nexpected: %#v\ngot: %#v",
 			config,
@@ -76,7 +101,11 @@ func TestSaveDatasetConfig(t *testing.T) {
 
 func TestLoadDatasetConfig(t *testing.T) {
 	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "config.json")
+
+	configPath := filepath.Join(
+		tempDir,
+		"config.json",
+	)
 
 	expected := DatasetConfig{
 		Model:             "random_forest_regressor",
@@ -95,21 +124,41 @@ func TestLoadDatasetConfig(t *testing.T) {
 		},
 	}
 
-	data, err := json.MarshalIndent(expected, "", "  ")
+	data, err := json.MarshalIndent(
+		expected,
+		"",
+		"  ",
+	)
 	if err != nil {
-		t.Fatalf("failed to marshal test configuration: %v", err)
+		t.Fatalf(
+			"failed to marshal test configuration: %v",
+			err,
+		)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		t.Fatalf("failed to write test configuration: %v", err)
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write test configuration: %v",
+			err,
+		)
 	}
 
 	actual, err := LoadDatasetConfig(configPath)
 	if err != nil {
-		t.Fatalf("LoadDatasetConfig failed: %v", err)
+		t.Fatalf(
+			"LoadDatasetConfig failed: %v",
+			err,
+		)
 	}
 
-	if !reflect.DeepEqual(actual, expected) {
+	if !reflect.DeepEqual(
+		actual,
+		expected,
+	) {
 		t.Fatalf(
 			"loaded configuration does not match expected\nexpected: %#v\ngot: %#v",
 			expected,
@@ -139,26 +188,48 @@ func TestSaveAndLoadDatasetConfig(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join("uploads", "12346")
+	jobDirectory := filepath.Join(
+		"uploads",
+		"12346",
+	)
 
-	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
-		t.Fatalf("failed to create test job directory: %v", err)
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create test job directory: %v",
+			err,
+		)
 	}
+
 	t.Cleanup(func() {
 		os.RemoveAll(jobDirectory)
 	})
 
-	configPath, err := SaveDatasetConfig(original, jobID)
+	configPath, err := SaveDatasetConfig(
+		original,
+		jobID,
+	)
 	if err != nil {
-		t.Fatalf("SaveDatasetConfig failed: %v", err)
+		t.Fatalf(
+			"SaveDatasetConfig failed: %v",
+			err,
+		)
 	}
 
 	loaded, err := LoadDatasetConfig(configPath)
 	if err != nil {
-		t.Fatalf("LoadDatasetConfig failed: %v", err)
+		t.Fatalf(
+			"LoadDatasetConfig failed: %v",
+			err,
+		)
 	}
 
-	if !reflect.DeepEqual(loaded, original) {
+	if !reflect.DeepEqual(
+		loaded,
+		original,
+	) {
 		t.Fatalf(
 			"configuration changed during save/load round trip\nexpected: %#v\ngot: %#v",
 			original,
@@ -168,16 +239,25 @@ func TestSaveAndLoadDatasetConfig(t *testing.T) {
 }
 
 func TestLoadDatasetConfigMissingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing.json")
+	path := filepath.Join(
+		t.TempDir(),
+		"missing.json",
+	)
 
 	_, err := LoadDatasetConfig(path)
+
 	if err == nil {
-		t.Fatal("expected error when loading missing configuration file")
+		t.Fatal(
+			"expected error when loading missing configuration file",
+		)
 	}
 }
 
 func TestLoadDatasetConfigInvalidJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "invalid.json")
+	path := filepath.Join(
+		t.TempDir(),
+		"invalid.json",
+	)
 
 	invalidJSON := `{
 		"model": "random_forest_regressor",
@@ -187,13 +267,23 @@ func TestLoadDatasetConfigInvalidJSON(t *testing.T) {
 		}
 	}`
 
-	if err := os.WriteFile(path, []byte(invalidJSON), 0644); err != nil {
-		t.Fatalf("failed to write invalid JSON: %v", err)
+	if err := os.WriteFile(
+		path,
+		[]byte(invalidJSON),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write invalid JSON: %v",
+			err,
+		)
 	}
 
 	_, err := LoadDatasetConfig(path)
+
 	if err == nil {
-		t.Fatal("expected error when loading invalid JSON")
+		t.Fatal(
+			"expected error when loading invalid JSON",
+		)
 	}
 }
 
@@ -215,7 +305,10 @@ func TestDatasetConfigJSONTags(t *testing.T) {
 
 	data, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("failed to marshal configuration: %v", err)
+		t.Fatalf(
+			"failed to marshal configuration: %v",
+			err,
+		)
 	}
 
 	jsonString := string(data)
@@ -236,8 +329,14 @@ func TestDatasetConfigJSONTags(t *testing.T) {
 	}
 
 	for _, key := range expectedKeys {
-		if !strings.Contains(jsonString, key) {
-			t.Errorf("expected JSON to contain key %s", key)
+		if !strings.Contains(
+			jsonString,
+			key,
+		) {
+			t.Errorf(
+				"expected JSON to contain key %s",
+				key,
+			)
 		}
 	}
 }
@@ -252,11 +351,440 @@ func TestDatasetConfigOptionalFeatures(t *testing.T) {
 
 	data, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("failed to marshal configuration: %v", err)
+		t.Fatalf(
+			"failed to marshal configuration: %v",
+			err,
+		)
 	}
 
 	// Features has omitempty, so it should not be emitted when nil.
-	if strings.Contains(string(data), `"features"`) {
-		t.Error("expected nil features to be omitted from JSON")
+	if strings.Contains(
+		string(data),
+		`"features"`,
+	) {
+		t.Error(
+			"expected nil features to be omitted from JSON",
+		)
+	}
+}
+
+func TestSaveRouteConfig(t *testing.T) {
+	jobID := int64(12347)
+
+	maxDistance := 140.0
+	maxStops := 40
+
+	config := RouteConfig{
+		StartLocation: "Warehouse",
+		EndLocation:   "Warehouse",
+		Optimization: RouteOptimizationConfig{
+			Algorithm: "nearest_neighbor_2opt",
+		},
+		Constraints: RouteConstraintConfig{
+			MaxDistance: &maxDistance,
+			MaxStops:    &maxStops,
+		},
+	}
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		"12347",
+	)
+
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create test job directory: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		os.RemoveAll(jobDirectory)
+	})
+
+	path, err := SaveRouteConfig(
+		config,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"SaveRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	expectedPath := filepath.Join(
+		jobDirectory,
+		"config.json",
+	)
+
+	if path != expectedPath {
+		t.Fatalf(
+			"expected config path %q, got %q",
+			expectedPath,
+			path,
+		)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf(
+			"failed to read saved route config: %v",
+			err,
+		)
+	}
+
+	var saved RouteConfig
+
+	if err := json.Unmarshal(
+		data,
+		&saved,
+	); err != nil {
+		t.Fatalf(
+			"saved route config contains invalid JSON: %v",
+			err,
+		)
+	}
+
+	if !reflect.DeepEqual(
+		saved,
+		config,
+	) {
+		t.Fatalf(
+			"saved route configuration does not match original\nexpected: %#v\ngot: %#v",
+			config,
+			saved,
+		)
+	}
+}
+
+func TestLoadRouteConfig(t *testing.T) {
+	tempDir := t.TempDir()
+
+	configPath := filepath.Join(
+		tempDir,
+		"config.json",
+	)
+
+	maxDistance := 200.5
+	maxStops := 25
+
+	expected := RouteConfig{
+		StartLocation: "Depot",
+		EndLocation:   "Warehouse",
+		Optimization: RouteOptimizationConfig{
+			Algorithm: "nearest_neighbor_2opt",
+		},
+		Constraints: RouteConstraintConfig{
+			MaxDistance: &maxDistance,
+			MaxStops:    &maxStops,
+		},
+	}
+
+	data, err := json.MarshalIndent(
+		expected,
+		"",
+		"  ",
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to marshal route configuration: %v",
+			err,
+		)
+	}
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write route configuration: %v",
+			err,
+		)
+	}
+
+	actual, err := LoadRouteConfig(configPath)
+	if err != nil {
+		t.Fatalf(
+			"LoadRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	if !reflect.DeepEqual(
+		actual,
+		expected,
+	) {
+		t.Fatalf(
+			"loaded route configuration does not match expected\nexpected: %#v\ngot: %#v",
+			expected,
+			actual,
+		)
+	}
+}
+
+func TestSaveAndLoadRouteConfig(t *testing.T) {
+	jobID := int64(12348)
+
+	maxDistance := 140.0
+	maxStops := 40
+
+	original := RouteConfig{
+		StartLocation: "Warehouse",
+		EndLocation:   "Warehouse",
+		Optimization: RouteOptimizationConfig{
+			Algorithm: "nearest_neighbor_2opt",
+		},
+		Constraints: RouteConstraintConfig{
+			MaxDistance: &maxDistance,
+			MaxStops:    &maxStops,
+		},
+	}
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		"12348",
+	)
+
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create test job directory: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		os.RemoveAll(jobDirectory)
+	})
+
+	configPath, err := SaveRouteConfig(
+		original,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"SaveRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	loaded, err := LoadRouteConfig(configPath)
+	if err != nil {
+		t.Fatalf(
+			"LoadRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	if !reflect.DeepEqual(
+		loaded,
+		original,
+	) {
+		t.Fatalf(
+			"route configuration changed during save/load round trip\nexpected: %#v\ngot: %#v",
+			original,
+			loaded,
+		)
+	}
+}
+
+func TestSaveAndLoadRouteConfigWithoutOptionalFields(t *testing.T) {
+	jobID := int64(12349)
+
+	original := RouteConfig{
+		StartLocation: "Warehouse",
+		Optimization: RouteOptimizationConfig{
+			Algorithm: "nearest_neighbor_2opt",
+		},
+	}
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		"12349",
+	)
+
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		t.Fatalf(
+			"failed to create test job directory: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		os.RemoveAll(jobDirectory)
+	})
+
+	configPath, err := SaveRouteConfig(
+		original,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"SaveRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf(
+			"failed to read route config: %v",
+			err,
+		)
+	}
+
+	jsonString := string(data)
+
+	if strings.Contains(
+		jsonString,
+		`"end_location"`,
+	) {
+		t.Error(
+			"expected omitted end_location field",
+		)
+	}
+
+	if strings.Contains(
+		jsonString,
+		`"max_distance"`,
+	) {
+		t.Error(
+			"expected omitted max_distance field",
+		)
+	}
+
+	if strings.Contains(
+		jsonString,
+		`"max_stops"`,
+	) {
+		t.Error(
+			"expected omitted max_stops field",
+		)
+	}
+
+	loaded, err := LoadRouteConfig(configPath)
+	if err != nil {
+		t.Fatalf(
+			"LoadRouteConfig failed: %v",
+			err,
+		)
+	}
+
+	if !reflect.DeepEqual(
+		loaded,
+		original,
+	) {
+		t.Fatalf(
+			"route configuration changed during save/load round trip\nexpected: %#v\ngot: %#v",
+			original,
+			loaded,
+		)
+	}
+}
+
+func TestLoadRouteConfigMissingFile(t *testing.T) {
+	path := filepath.Join(
+		t.TempDir(),
+		"missing.json",
+	)
+
+	_, err := LoadRouteConfig(path)
+
+	if err == nil {
+		t.Fatal(
+			"expected error when loading missing route configuration file",
+		)
+	}
+}
+
+func TestLoadRouteConfigInvalidJSON(t *testing.T) {
+	path := filepath.Join(
+		t.TempDir(),
+		"invalid.json",
+	)
+
+	invalidJSON := `{
+		"start_location": "Warehouse",
+		"optimization": {
+			"algorithm": "nearest_neighbor_2opt",
+		}
+	}`
+
+	if err := os.WriteFile(
+		path,
+		[]byte(invalidJSON),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write invalid route JSON: %v",
+			err,
+		)
+	}
+
+	_, err := LoadRouteConfig(path)
+
+	if err == nil {
+		t.Fatal(
+			"expected error when loading invalid route JSON",
+		)
+	}
+}
+
+func TestRouteConfigJSONTags(t *testing.T) {
+	maxDistance := 140.0
+	maxStops := 40
+
+	config := RouteConfig{
+		StartLocation: "Warehouse",
+		EndLocation:   "Customer C",
+		Optimization: RouteOptimizationConfig{
+			Algorithm: "nearest_neighbor_2opt",
+		},
+		Constraints: RouteConstraintConfig{
+			MaxDistance: &maxDistance,
+			MaxStops:    &maxStops,
+		},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf(
+			"failed to marshal route configuration: %v",
+			err,
+		)
+	}
+
+	jsonString := string(data)
+
+	expectedKeys := []string{
+		`"start_location"`,
+		`"end_location"`,
+		`"optimization"`,
+		`"algorithm"`,
+		`"constraints"`,
+		`"max_distance"`,
+		`"max_stops"`,
+	}
+
+	for _, key := range expectedKeys {
+		if !strings.Contains(
+			jsonString,
+			key,
+		) {
+			t.Errorf(
+				"expected JSON to contain key %s",
+				key,
+			)
+		}
 	}
 }
