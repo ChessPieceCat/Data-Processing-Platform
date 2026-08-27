@@ -1,181 +1,161 @@
 const csvFileInput = document.getElementById("csvFile");
 const inspectButton = document.getElementById("inspectDataset");
-
 const datasetInfo = document.getElementById("datasetInfo");
 const datasetStatus = document.getElementById("datasetStatus");
-
 const submitJobButton = document.getElementById("submitJob");
-
 const modelSelect = document.getElementById("model");
 const modelOptions = document.getElementById("modelOptions");
-
-const modelVisualizationOptions = document.getElementById("modelVisualizationOptions");
-
+const modelVisualizationOptions = document.getElementById(
+    "modelVisualizationOptions"
+);
 const configTypeSelect = document.getElementById("configType");
 const manualConfig = document.getElementById("manualConfig");
-
 const targetSelect = document.getElementById("target");
 const featureSelectionInputs = document.querySelectorAll(
     'input[name="featureSelection"]'
 );
-
 const manualFeatures = document.getElementById("manualFeatures");
 const featureList = document.getElementById("featureList");
 
-
-function updateModelOptions() {
-    const modelSelected = modelSelect.value !== "none";
-
-    modelOptions.hidden = !modelSelected;
-    modelVisualizationOptions.hidden = !modelSelected;
-
-    if (!modelSelected) {
-        manualConfig.hidden = true;
-        return;
-    }
-
-    updateConfigOptions();
-}
+// Image processing elements.
+const imageFileInput = document.getElementById("imageFile");
+const imageOptions = document.getElementById("imageOptions");
+const imageUploadID = document.getElementById("imageUploadID");
+const resizeImageCheckbox = document.getElementById("resizeImage");
+const resizeOptions = document.getElementById("resizeOptions");
+const compressImageCheckbox = document.getElementById("compressImage");
+const compressionOptions = document.getElementById("compressionOptions");
+const convertFormatCheckbox = document.getElementById("convertFormat");
+const formatOptions = document.getElementById("formatOptions");
+const outputFormat = document.getElementById("outputFormat");
 
 
-function updateConfigOptions() {
-    const manual = configTypeSelect.value === "manual";
+// Upload the selected image and show processing options.
+if (imageFileInput && imageOptions) {
+    imageFileInput.addEventListener("change", async () => {
+        const file = imageFileInput.files[0];
 
-    manualConfig.hidden = !manual;
-}
+        if (!file) {
+            imageOptions.hidden = true;
+            imageUploadID.value = "";
+            return;
+        }
 
+        imageOptions.hidden = true;
 
-function updateFeatureOptions() {
-    const selected = document.querySelector(
-        'input[name="featureSelection"]:checked'
-    );
+        try {
+            const formData = new FormData();
+            formData.append("imageFile", file);
 
-    const manual = selected && selected.value === "manual";
+            const response = await fetch("/upload/image", {
+                method: "POST",
+                body: formData
+            });
 
-    manualFeatures.hidden = !manual;
-}
+            if (!response.ok) {
+                const message = await response.text();
+                throw new Error(message);
+            }
 
+            const data = await response.json();
 
-function populateColumns(columns) {
-    // Clear existing target options.
-    targetSelect.innerHTML = "";
+            imageUploadID.value = data.upload_id;
+            imageOptions.hidden = false;
+        } catch (error) {
+            imageOptions.hidden = true;
+            imageFileInput.value = "";
 
-    const defaultOption = document.createElement("option");
-    defaultOption.value = "";
-    defaultOption.textContent = "Select a target";
-
-    targetSelect.appendChild(defaultOption);
-
-    // Clear existing feature options.
-    featureList.innerHTML = "";
-
-    columns.forEach((column) => {
-        // Add target option.
-        const targetOption = document.createElement("option");
-        targetOption.value = column;
-        targetOption.textContent = column;
-
-        targetSelect.appendChild(targetOption);
-
-        // Add feature checkbox.
-        const label = document.createElement("label");
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.name = "features";
-        checkbox.value = column;
-
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(` ${column}`));
-
-        featureList.appendChild(label);
-        featureList.appendChild(document.createElement("br"));
-
-        checkbox.addEventListener("change", updateFeatureAvailability);
-    });
-
-    targetSelect.addEventListener("change", updateFeatureAvailability);
-
-    updateFeatureAvailability();
-}
-
-
-function updateFeatureAvailability() {
-    const target = targetSelect.value;
-
-    const featureCheckboxes = document.querySelectorAll(
-        'input[name="features"]'
-    );
-
-    featureCheckboxes.forEach((checkbox) => {
-        const isTarget = checkbox.value === target;
-
-        if (isTarget) {
-            checkbox.checked = false;
-            checkbox.disabled = true;
-        } else {
-            checkbox.disabled = false;
+            alert(`Error uploading image: ${error.message}`);
         }
     });
 }
 
 
-inspectButton.addEventListener("click", async () => {
-    const file = csvFileInput.files[0];
-
-    if (!file) {
-        datasetStatus.textContent = "Please select a CSV file first.";
-        datasetInfo.hidden = false;
-        return;
-    }
-
-    const formData = new FormData();
-    formData.append("csvFile", file);
-
-    datasetStatus.textContent = "Inspecting dataset...";
-    datasetInfo.hidden = false;
-    submitJobButton.disabled = true;
-
-    try {
-        const response = await fetch("/inspect/dataset", {
-            method: "POST",
-            body: formData
-        });
-
-        if (!response.ok) {
-            const message = await response.text();
-            throw new Error(message);
-        }
-
-        const data = await response.json();
-
-        document.getElementById("uploadID").value = data.upload_id;
-
-        populateColumns(data.columns);
-
-        datasetStatus.textContent =
-            `Dataset loaded successfully. ${data.columns.length} columns found.`;
-
-        submitJobButton.disabled = false;
-
-    } catch (error) {
-        datasetStatus.textContent =
-            `Error inspecting dataset: ${error.message}`;
-
-        submitJobButton.disabled = true;
-    }
-});
+// Show or hide resize options.
+if (resizeImageCheckbox && resizeOptions) {
+    resizeImageCheckbox.addEventListener("change", () => {
+        resizeOptions.hidden = !resizeImageCheckbox.checked;
+    });
+}
 
 
-modelSelect.addEventListener("change", updateModelOptions);
+// Show or hide compression options.
+if (compressImageCheckbox && compressionOptions) {
+    compressImageCheckbox.addEventListener("change", () => {
+        updateImageCompressionOptions();
+    });
+}
 
-configTypeSelect.addEventListener("change", updateConfigOptions);
+// Update the visibility of compression options based on the selected output format.
+if (outputFormat) {
+    outputFormat.addEventListener(
+        "change",
+        updateImageCompressionOptions
+    );
+}
 
-featureSelectionInputs.forEach((input) => {
-    input.addEventListener("change", updateFeatureOptions);
-});
+
+// Show or hide format-conversion options.
+if (convertFormatCheckbox && formatOptions) {
+    convertFormatCheckbox.addEventListener("change", () => {
+        formatOptions.hidden = !convertFormatCheckbox.checked;
+        updateImageCompressionOptions();
+    });
+}
 
 
 // Establish the correct initial state when the page loads.
 updateModelOptions();
 updateFeatureOptions();
+
+if (imageOptions) {
+    imageOptions.hidden =
+        !imageFileInput || imageFileInput.files.length === 0;
+}
+
+if (resizeOptions) {
+    resizeOptions.hidden =
+        !resizeImageCheckbox || !resizeImageCheckbox.checked;
+}
+
+if (formatOptions) {
+    formatOptions.hidden =
+        !convertFormatCheckbox || !convertFormatCheckbox.checked;
+}
+
+updateImageCompressionOptions();
+
+// Update the visibility of compression options based on the selected output format.
+function updateImageCompressionOptions() {
+    if (!compressionOptions || !compressImageCheckbox) {
+        return;
+    }
+
+    if (!compressImageCheckbox.checked) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    const file = imageFileInput?.files[0];
+
+    const originalIsPng =
+        file && file.type === "image/png";
+
+    const convertingToPng =
+        convertFormatCheckbox &&
+        convertFormatCheckbox.checked &&
+        outputFormat &&
+        outputFormat.value === "png";
+
+    if (originalIsPng && !convertFormatCheckbox.checked) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    if (convertingToPng) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    compressionOptions.hidden = false;
+}

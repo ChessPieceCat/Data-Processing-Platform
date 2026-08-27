@@ -75,16 +75,22 @@ func main() {
 	// Handle the results page.
 	http.HandleFunc("/results", apphttp.ResultsHandler(db))
 	http.HandleFunc("/results/visualization", apphttp.VisualizationHandler(db))
+	http.HandleFunc("/results/image", apphttp.ImageResultHandler(db))
 
 	// Handle the download of result files.
 	http.HandleFunc("/results/download", apphttp.DownloadResultsHandler(db))
 	http.HandleFunc("/results/download/model", apphttp.DownloadModelHandler(db))
+	http.HandleFunc("/results/download/metadata", apphttp.DownloadImageMetadataHandler(db))
 
 	// Handle dataset inspection.
 	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)
 
+	// handle image upload
+	http.HandleFunc("/upload/image", apphttp.ImageUploadHandler)
+
 	// Handle job submission.
 	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db, redisClient))
+	http.HandleFunc("/submit/image", apphttp.ImageSubmissionHandler(db, redisClient))
 
 	// Start the HTTP server.
 	log.Println("Server is running on http://localhost:8082")

@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +33,6 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	})
 
 	db := database.OpenDatabase()
-
 	if db == nil {
 		t.Fatal("OpenDatabase returned nil")
 	}
@@ -47,7 +49,7 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	return db
 }
 
-// createTestJob creates a job and registers cleanup for the database row.
+// createTestJob creates a dataset job and registers cleanup for the database row.
 func createTestJob(t *testing.T, db *sql.DB) int64 {
 	t.Helper()
 
@@ -187,8 +189,8 @@ func TestStartJob(t *testing.T) {
 	}
 }
 
-// TestCompleteJob verifies that a job becomes completed and receives a
-// completion timestamp.
+// TestCompleteJob verifies that a job becomes completed and receives
+// a completion timestamp.
 func TestCompleteJob(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -352,8 +354,8 @@ func TestValidateCSVMissingFile(t *testing.T) {
 	}
 }
 
-// TestGetCSVColumns verifies that the first CSV row is returned as the
-// column names.
+// TestGetCSVColumns verifies that the first CSV row is returned as
+// the column names.
 func TestGetCSVColumns(t *testing.T) {
 	filePath := filepath.Join(
 		t.TempDir(),
@@ -415,12 +417,97 @@ func TestGetCSVColumnsMissingFile(t *testing.T) {
 	}
 }
 
-// TestRunDatasetProcessorMissingInput verifies that processor failures are
+// TestFindProcessor verifies that the dataset processor path can be found.
+func TestFindProcessor(t *testing.T) {
+	processorPath, err := findProcessor("dataset")
+	if err != nil {
+		t.Fatalf("findProcessor failed: %v", err)
+	}
+
+	expectedSuffix := filepath.Join(
+		"processors",
+		"dataset",
+		"main.py",
+	)
+
+	if !strings.HasSuffix(
+		processorPath,
+		expectedSuffix,
+	) {
+		t.Fatalf(
+			"expected processor path to end with %q, got %q",
+			expectedSuffix,
+			processorPath,
+		)
+	}
+
+	if _, err := os.Stat(processorPath); err != nil {
+		t.Fatalf(
+			"expected processor path to exist: %v",
+			err,
+		)
+	}
+}
+
+// TestFindImageProcessor verifies that the image processor path can be found.
+func TestFindImageProcessor(t *testing.T) {
+	processorPath, err := findProcessor("image")
+	if err != nil {
+		t.Fatalf("findProcessor failed for image: %v", err)
+	}
+
+	expectedSuffix := filepath.Join(
+		"processors",
+		"image",
+		"main.py",
+	)
+
+	if !strings.HasSuffix(
+		processorPath,
+		expectedSuffix,
+	) {
+		t.Fatalf(
+			"expected processor path to end with %q, got %q",
+			expectedSuffix,
+			processorPath,
+		)
+	}
+
+	if _, err := os.Stat(processorPath); err != nil {
+		t.Fatalf(
+			"expected image processor path to exist: %v",
+			err,
+		)
+	}
+}
+
+// TestFindProcessorMissing verifies that an unknown processor type
+// returns an error.
+func TestFindProcessorMissing(t *testing.T) {
+	_, err := findProcessor("does-not-exist")
+
+	if err == nil {
+		t.Fatal("expected findProcessor to return an error")
+	}
+
+	if !strings.Contains(
+		err.Error(),
+		"could not find processor",
+	) {
+		t.Fatalf(
+			"expected processor lookup error, got %v",
+			err,
+		)
+	}
+}
+
+// TestRunProcessorMissingInput verifies that processor failures are
 // returned with useful output.
-func TestRunDatasetProcessorMissingInput(t *testing.T) {
+func TestRunProcessorMissingInput(t *testing.T) {
 	jobID := int64(999999)
 
-	_, err := runDatasetProcessor(
+	_, err := runProcessor(
+		"dataset",
 		"does-not-exist.csv",
 		jobID,
 		"does-not-exist-config.json",
@@ -474,17 +561,18 @@ func TestProcessJobSuccess(t *testing.T) {
 		"config.json",
 	)
 
-	input := "temperature,humidity,co2\n" +
-		"20,40,400\n" +
-		"21,42,410\n" +
-		"22,44,420\n" +
-		"23,46,430\n" +
-		"24,48,440\n" +
-		"25,50,450\n" +
-		"26,52,460\n" +
-		"27,54,470\n" +
-		"28,56,480\n" +
-		"29,58,490\n"
+	input :=
+		"temperature,humidity,co2\n" +
+			"20,40,400\n" +
+			"21,42,410\n" +
+			"22,44,420\n" +
+			"23,46,430\n" +
+			"24,48,440\n" +
+			"25,50,450\n" +
+			"26,52,460\n" +
+			"27,54,470\n" +
+			"28,56,480\n" +
+			"29,58,490\n"
 
 	if err := os.WriteFile(
 		inputPath,
@@ -515,13 +603,17 @@ func TestProcessJobSuccess(t *testing.T) {
 
 	_, err := db.Exec(
 		`UPDATE jobs
-     SET input_reference = $1
-     WHERE id = $2`,
+		 SET input_reference = $1
+		 WHERE id = $2`,
 		inputPath,
 		jobID,
 	)
+
 	if err != nil {
-		t.Fatalf("failed to set input reference: %v", err)
+		t.Fatalf(
+			"failed to set input reference: %v",
+			err,
+		)
 	}
 
 	if err := ProcessJob(
@@ -597,21 +689,198 @@ func TestProcessJobSuccess(t *testing.T) {
 	}
 }
 
-// TestProcessJobFailure verifies that a job fails gracefully when the input file is missing.
+// TestProcessImageJobSuccess verifies that the shared ProcessJob lifecycle
+// successfully dispatches an image job to the image processor.
+func TestProcessImageJobSuccess(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID, err := CreateJob(db, "image")
+	if err != nil {
+		t.Fatalf("CreateJob failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = DeleteJob(db, jobID)
+	})
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		fmt.Sprintf("%d", jobID),
+	)
+
+	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
+		t.Fatalf(
+			"failed to create image job directory: %v",
+			err,
+		)
+	}
+
+	inputPath := filepath.Join(
+		jobDirectory,
+		"input.png",
+	)
+
+	img := image.NewRGBA(
+		image.Rect(0, 0, 1, 1),
+	)
+
+	img.Set(
+		0,
+		0,
+		color.RGBA{
+			R: 255,
+			G: 0,
+			B: 0,
+			A: 255,
+		},
+	)
+
+	imageFile, err := os.Create(inputPath)
+	if err != nil {
+		t.Fatalf(
+			"failed to create image: %v",
+			err,
+		)
+	}
+
+	if err := png.Encode(imageFile, img); err != nil {
+		imageFile.Close()
+
+		t.Fatalf(
+			"failed to encode test PNG: %v",
+			err,
+		)
+	}
+
+	if err := imageFile.Close(); err != nil {
+		t.Fatalf(
+			"failed to close test image: %v",
+			err,
+		)
+	}
+
+	configPath := filepath.Join(
+		jobDirectory,
+		"config.json",
+	)
+
+	config := `{
+		"resize": false,
+		"compression": false,
+		"format_conversion": false,
+		"output_format": "original",
+		"extract_metadata": false
+	}`
+
+	if err := os.WriteFile(
+		configPath,
+		[]byte(config),
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to write image config: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		_ = os.RemoveAll(jobDirectory)
+	})
+
+	_, err = db.Exec(
+		`UPDATE jobs
+		 SET input_reference = $1
+		 WHERE id = $2`,
+		inputPath,
+		jobID,
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"failed to set input reference: %v",
+			err,
+		)
+	}
+
+	if err := ProcessJob(db, jobID); err != nil {
+		t.Fatalf(
+			"ProcessJob failed for image job: %v",
+			err,
+		)
+	}
+
+	job, err := GetJob(db, jobID)
+	if err != nil {
+		t.Fatalf("GetJob failed: %v", err)
+	}
+
+	if job.Status != "completed" {
+		t.Fatalf(
+			"expected status completed, got %q",
+			job.Status,
+		)
+	}
+
+	if job.ResultReference == nil {
+		t.Fatal("expected ResultReference to be set")
+	}
+
+	if _, err := os.Stat(
+		*job.ResultReference,
+	); err != nil {
+		t.Fatalf(
+			"expected image result file to exist: %v",
+			err,
+		)
+	}
+
+	resultData, err := os.ReadFile(
+		*job.ResultReference,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to read image result file: %v",
+			err,
+		)
+	}
+
+	var result map[string]interface{}
+
+	if err := json.Unmarshal(
+		resultData,
+		&result,
+	); err != nil {
+		t.Fatalf(
+			"image result file contains invalid JSON: %v",
+			err,
+		)
+	}
+
+	if result["original_path"] == nil {
+		t.Fatal("expected original_path in image results")
+	}
+
+	if result["processed_path"] == nil {
+		t.Fatal("expected processed_path in image results")
+	}
+}
+
+// TestProcessJobFailure verifies that a job fails gracefully when
+// the input file is missing.
 func TestProcessJobFailure(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	jobID := createTestJob(t, db)
-
 	inputReference := "does-not-exist.csv"
 
 	_, err := db.Exec(
 		`UPDATE jobs
-         SET input_reference = $1
-         WHERE id = $2`,
+		 SET input_reference = $1
+		 WHERE id = $2`,
 		inputReference,
 		jobID,
 	)
+
 	if err != nil {
 		t.Fatalf(
 			"failed to set input reference: %v",
@@ -655,7 +924,8 @@ func TestProcessJobFailure(t *testing.T) {
 	}
 }
 
-// TestProcessJobMissingInput verifies that a job without an input reference fails gracefully.
+// TestProcessJobMissingInput verifies that a job without an input
+// reference fails gracefully.
 func TestProcessJobMissingInput(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -676,25 +946,53 @@ func TestProcessJobMissingInput(t *testing.T) {
 			err,
 		)
 	}
+
+	job, getErr := GetJob(db, jobID)
+	if getErr != nil {
+		t.Fatalf(
+			"GetJob failed: %v",
+			getErr,
+		)
+	}
+
+	if job.Status != "queued" {
+		t.Fatalf(
+			"expected job to remain queued when input is missing, got %q",
+			job.Status,
+		)
+	}
 }
 
-// TestEnqueueJob verifies that a job ID is correctly added to the Redis stream.
+// TestEnqueueJob verifies that a job ID is correctly added to
+// the Redis stream.
 func TestEnqueueJob(t *testing.T) {
-	redisClient := redisclient.NewClient(&redisclient.Options{
-		Addr: "localhost:6379",
-	})
+	redisClient := redisclient.NewClient(
+		&redisclient.Options{
+			Addr: "localhost:6379",
+		},
+	)
+
 	defer redisClient.Close()
 
 	ctx := context.Background()
 
 	if err := redisClient.Ping(ctx).Err(); err != nil {
-		t.Skipf("Redis is not available: %v", err)
+		t.Skipf(
+			"Redis is not available: %v",
+			err,
+		)
 	}
 
 	jobID := int64(12345)
 
-	if err := EnqueueJob(redisClient, jobID); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := EnqueueJob(
+		redisClient,
+		jobID,
+	); err != nil {
+		t.Fatalf(
+			"unexpected error: %v",
+			err,
+		)
 	}
 
 	messages, err := redisClient.XRange(
@@ -703,14 +1001,19 @@ func TestEnqueueJob(t *testing.T) {
 		"-",
 		"+",
 	).Result()
+
 	if err != nil {
-		t.Fatalf("failed to read Redis stream: %v", err)
+		t.Fatalf(
+			"failed to read Redis stream: %v",
+			err,
+		)
 	}
 
 	var found bool
 
 	for _, message := range messages {
 		value, ok := message.Values["job_id"].(string)
+
 		if !ok {
 			continue
 		}
@@ -735,11 +1038,15 @@ func TestEnqueueJob(t *testing.T) {
 	}
 
 	if !found {
-		t.Fatalf("expected job_id %d to be added to Redis stream", jobID)
+		t.Fatalf(
+			"expected job_id %d to be added to Redis stream",
+			jobID,
+		)
 	}
 }
 
-// TestProcessJobUnsupportedType verifies that a job with an unsupported type fails gracefully.
+// TestProcessJobUnsupportedType verifies that a job with an unsupported
+// processor type fails processor lookup without being claimed.
 func TestProcessJobUnsupportedType(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -747,15 +1054,19 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 
 	_, err := db.Exec(
 		`UPDATE jobs
-     SET type = $1,
-         input_reference = $2
-     WHERE id = $3`,
+		 SET type = $1,
+		     input_reference = $2
+		 WHERE id = $3`,
 		"unsupported",
 		"test-input.csv",
 		jobID,
 	)
+
 	if err != nil {
-		t.Fatalf("failed to update job: %v", err)
+		t.Fatalf(
+			"failed to update job: %v",
+			err,
+		)
 	}
 
 	err = ProcessJob(db, jobID)
@@ -766,10 +1077,10 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 
 	if !strings.Contains(
 		err.Error(),
-		"unsupported job type",
+		"could not find processor",
 	) {
 		t.Fatalf(
-			"expected unsupported job type error, got %v",
+			"expected processor lookup error, got %v",
 			err,
 		)
 	}
@@ -782,9 +1093,10 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 		)
 	}
 
+	// Unsupported processor types are treated as permanent failures.
 	if job.Status != "failed" {
 		t.Fatalf(
-			"expected status failed, got %q",
+			"expected status failed when processor lookup fails, got %q",
 			job.Status,
 		)
 	}

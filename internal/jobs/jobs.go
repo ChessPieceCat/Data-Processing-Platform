@@ -36,18 +36,6 @@ func CreateJob(db *sql.DB, jobType string) (int64, error) {
 	return id, nil
 }
 
-type JobProcessor func(
-	filePath string,
-	jobID int64,
-	configPath string,
-) (string, error)
-
-var processors = map[string]JobProcessor{
-	"dataset": runDatasetProcessor,
-	"image":   runImageProcessor,
-	"route":   runRouteProcessor,
-}
-
 // ProcessJob manages the lifecycle of a job.
 func ProcessJob(
 	db *sql.DB,
@@ -70,21 +58,13 @@ func ProcessJob(
 		return err
 	}
 
-	var resultPath string
-
-	processor, ok := processors[job.Type]
-	if !ok {
-		err = fmt.Errorf(
-			"unsupported job type: %s",
-			job.Type,
-		)
-	} else {
-		resultPath, err = processor(
-			*job.InputReference,
-			jobID,
-			configPath,
-		)
-	}
+	// Run the processor
+	resultPath, err := runProcessor(
+		job.Type,
+		*job.InputReference,
+		jobID,
+		configPath,
+	)
 
 	if err != nil {
 		if failErr := failJob(db, jobID, err.Error()); failErr != nil {
@@ -104,15 +84,11 @@ func ProcessJob(
 	}
 
 	// Mark the job as complete.
-	if err := completeJob(db, jobID); err != nil {
-		return err
-	}
-
-	return nil
+	return completeJob(db, jobID)
 }
 
-// findDatasetProcessor finds the Python data processor relative to the project root
-func findDatasetProcessor() (string, error) {
+// findProcessor searches for the processor script for a given job type.
+func findProcessor(processorType string) (string, error) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -124,19 +100,26 @@ func findDatasetProcessor() (string, error) {
 		processorPath := filepath.Join(
 			directory,
 			"processors",
-			"dataset",
+			processorType,
 			"main.py",
 		)
 
 		if _, err := os.Stat(processorPath); err == nil {
 			return processorPath, nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf(
+				"failed to access processor for type %q: %w",
+				processorType,
+				err,
+			)
 		}
 
 		parent := filepath.Dir(directory)
 
 		if parent == directory {
 			return "", fmt.Errorf(
-				"could not find processors/dataset/main.py from %s",
+				"could not find processor for type %q from %s",
+				processorType,
 				workingDirectory,
 			)
 		}
@@ -145,8 +128,9 @@ func findDatasetProcessor() (string, error) {
 	}
 }
 
-// runDatasetProcessor runs the Python dataset processor.
-func runDatasetProcessor(
+// runProcessor executes the specified processor script with the given arguments.
+func runProcessor(
+	processorType string,
 	filePath string,
 	jobID int64,
 	configPath string,
@@ -157,7 +141,7 @@ func runDatasetProcessor(
 		jobID,
 	)
 
-	processorPath, err := findDatasetProcessor()
+	processorPath, err := findProcessor(processorType)
 	if err != nil {
 		return "", err
 	}
@@ -173,31 +157,14 @@ func runDatasetProcessor(
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf(
-			"dataset processor failed: %w: %s",
+			"%s processor failed: %w: %s",
+			processorType,
 			err,
 			string(output),
 		)
 	}
 
 	return resultPath, nil
-}
-
-// runImageProcessor runs the Python image processor.
-func runImageProcessor(
-	_ string,
-	_ int64,
-	_ string,
-) (string, error) {
-	return "", fmt.Errorf("image processing is not implemented")
-}
-
-// runRouteProcessor runs the Python route processor.
-func runRouteProcessor(
-	_ string,
-	_ int64,
-	_ string,
-) (string, error) {
-	return "", fmt.Errorf("route processing is not implemented")
 }
 
 // saveResultReference stores the result file reference for a job.

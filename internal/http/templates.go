@@ -2,7 +2,7 @@ package server
 
 import "text/template"
 
-var ResultsTemplate = template.Must(template.New("results").Parse(`<!DOCTYPE html>
+var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -329,5 +329,285 @@ var ResultsTemplate = template.Must(template.New("results").Parse(`<!DOCTYPE htm
     {{end}}
 
     <p><a href="/">Back to jobs</a></p>
+</body>
+</html>`))
+
+var ImageResultsTemplate = template.Must(
+	template.New("image_results").Parse(`<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Results for Job #{{.Job.ID}}</title>
+</head>
+
+<body>
+    <h1>Image Results for Job #{{.Job.ID}}</h1>
+
+    <section>
+        <h2>Job Information</h2>
+
+        <dl>
+            <dt>Type</dt>
+            <dd>{{.Job.Type}}</dd>
+
+            <dt>Status</dt>
+            <dd>{{.Job.Status}}</dd>
+
+            <dt>Created</dt>
+            <dd>{{.Job.CreatedAt}}</dd>
+
+            {{with .Job.StartedAt}}
+            <dt>Started</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+
+            {{with .Job.CompletedAt}}
+            <dt>Completed</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+        </dl>
+    </section>
+
+    {{with .Job.ErrorMessage}}
+    <section>
+        <h2>Error</h2>
+        <p>{{.}}</p>
+    </section>
+    {{end}}
+
+    {{if .ImageResults}}
+
+    <section>
+        <h2>Images</h2>
+
+        <div>
+            <h3>Original Image</h3>
+            <img
+                src="/results/image?id={{.Job.ID}}&type=original"
+                alt="Original image"
+                style="max-width: 100%;"
+            >
+        </div>
+
+        <div>
+            <h3>Processed Image</h3>
+            <img
+                src="/results/image?id={{.Job.ID}}&type=processed"
+                alt="Processed image"
+                style="max-width: 100%;"
+            >
+        </div>
+    </section>
+
+    <section>
+        <h2>Processing Operations</h2>
+
+        {{if .ImageResults.Operations}}
+        <ul>
+            {{range .ImageResults.Operations}}
+            <li>{{.}}</li>
+            {{end}}
+        </ul>
+        {{else}}
+        <p>No image processing operations were performed.</p>
+        {{end}}
+    </section>
+
+    <section>
+        <h2>Original Image</h2>
+
+        <dl>
+            <dt>Format</dt>
+            <dd>{{.ImageResults.OriginalFormat}}</dd>
+
+            <dt>Dimensions</dt>
+            <dd>
+                {{.ImageResults.OriginalWidth}}
+                ×
+                {{.ImageResults.OriginalHeight}}
+            </dd>
+        </dl>
+    </section>
+
+    <section>
+        <h2>Processed Image</h2>
+
+        <dl>
+            <dt>Format</dt>
+            <dd>{{.ImageResults.ResultFormat}}</dd>
+
+            <dt>Dimensions</dt>
+            <dd>
+                {{.ImageResults.ResultWidth}}
+                ×
+                {{.ImageResults.ResultHeight}}
+            </dd>
+        </dl>
+    </section>
+
+    {{with .ImageResults.Compression}}
+    <section>
+        <h2>Compression</h2>
+
+        <dl>
+            <dt>Original Size</dt>
+            <dd>{{.OriginalSize}} bytes</dd>
+
+            <dt>Result Size</dt>
+            <dd>{{.ResultSize}} bytes</dd>
+
+            <dt>Compression Ratio</dt>
+            <dd>{{.CompressionRatio}}</dd>
+        </dl>
+    </section>
+    {{end}}
+
+    {{if .ImageResults.Metadata}}
+    <section>
+        <h2>Metadata</h2>
+
+        <dl>
+            {{range $key, $value := .ImageResults.Metadata}}
+            <dt>{{$key}}</dt>
+            <dd>{{$value}}</dd>
+            {{end}}
+        </dl>
+
+        {{if .ImageResults.MetadataReference}}
+        <p>
+            <a href="/results/download/metadata?id={{.Job.ID}}">
+                Download Full Metadata
+            </a>
+        </p>
+        {{end}}
+    </section>
+    {{else}}
+        {{if .ImageResults.MetadataReference}}
+        <section>
+            <h2>Metadata</h2>
+            <p>
+                Full metadata was extracted but is not displayed in the
+                results summary.
+            </p>
+
+            <a href="/results/download/metadata?id={{.Job.ID}}">
+                Download Full Metadata
+            </a>
+        </section>
+        {{end}}
+    {{end}}
+
+    {{else}}
+        {{if eq .Job.Status "processing"}}
+        <p>The image is still being processed.</p>
+
+        {{else if eq .Job.Status "queued"}}
+        <p>The job is waiting to be processed.</p>
+
+        {{else if eq .Job.Status "failed"}}
+        <p>Image processing failed.</p>
+
+        {{else}}
+        <p>No image results are currently available.</p>
+        {{end}}
+    {{end}}
+
+    <p>
+        <a href="/">Back to jobs</a>
+    </p>
+
+</body>
+</html>`),
+)
+
+var RouteResultsTemplate = template.Must(template.New("route_results").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Results for Job #{{.Job.ID}}</title>
+</head>
+<body>
+    <h1>Route Results for Job #{{.Job.ID}}</h1>
+
+    <section>
+        <h2>Job Information</h2>
+        <dl>
+            <dt>Type</dt>
+            <dd>{{.Job.Type}}</dd>
+
+            <dt>Status</dt>
+            <dd>{{.Job.Status}}</dd>
+
+            <dt>Created</dt>
+            <dd>{{.Job.CreatedAt}}</dd>
+
+            {{with .Job.StartedAt}}
+            <dt>Started</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+
+            {{with .Job.CompletedAt}}
+            <dt>Completed</dt>
+            <dd>{{.}}</dd>
+            {{end}}
+        </dl>
+    </section>
+
+    {{with .Job.ErrorMessage}}
+    <section>
+        <h2>Error</h2>
+        <p>{{.}}</p>
+    </section>
+    {{end}}
+
+    {{if .RouteResults}}
+    <section>
+        <h2>Route</h2>
+        <p>Route results will be displayed here.</p>
+    </section>
+
+    <section>
+        <h2>Locations</h2>
+        <p>Location and start/end information will be displayed here.</p>
+    </section>
+
+    <section>
+        <h2>Constraints</h2>
+        <p>Applied routing constraints will be displayed here.</p>
+    </section>
+
+    <section>
+        <h2>Optimization</h2>
+        <p>Optimization results, including 2-opt improvements, will be displayed here.</p>
+    </section>
+
+    <section>
+        <h2>Performance</h2>
+        <p>Algorithm and runtime information will be displayed here.</p>
+    </section>
+
+    <section>
+        <h2>Statistics</h2>
+        <p>Route statistics and optimization metrics will be displayed here.</p>
+    </section>
+
+    {{else}}
+        {{if eq .Job.Status "processing"}}
+        <p>The route is still being processed.</p>
+        {{else if eq .Job.Status "queued"}}
+        <p>The job is waiting to be processed.</p>
+        {{else if eq .Job.Status "failed"}}
+        <p>Route processing failed.</p>
+        {{else}}
+        <p>No route results are currently available.</p>
+        {{end}}
+    {{end}}
+
+    <p>
+        <a href="/">Back to jobs</a>
+    </p>
 </body>
 </html>`))

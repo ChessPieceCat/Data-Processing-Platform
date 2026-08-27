@@ -57,3 +57,63 @@ func LoadDatasetConfig(configPath string) (DatasetConfig, error) {
 
 	return config, nil
 }
+
+type ImageConfig struct {
+	Resize             bool   `json:"resize"`
+	ResizeWidth        int    `json:"resize_width,omitempty"`
+	ResizeHeight       int    `json:"resize_height,omitempty"`
+	Compression        bool   `json:"compression"`
+	CompressionQuality int    `json:"compression_quality,omitempty"`
+	FormatConversion   bool   `json:"format_conversion"`
+	OutputFormat       string `json:"output_format,omitempty"`
+	ExtractMetadata    bool   `json:"extract_metadata"`
+}
+
+func SaveImageConfig(
+	config ImageConfig,
+	jobID int64,
+) (string, error) {
+	configPath := fmt.Sprintf(
+		"uploads/%d/config.json",
+		jobID,
+	)
+
+	data, err := json.MarshalIndent(
+		config,
+		"",
+		"  ",
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		return "", err
+	}
+
+	return configPath, nil
+}
+
+func LoadImageConfig(
+	configPath string,
+) (ImageConfig, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ImageConfig{}, err
+	}
+
+	var config ImageConfig
+
+	if err := json.Unmarshal(
+		data,
+		&config,
+	); err != nil {
+		return ImageConfig{}, err
+	}
+
+	return config, nil
+}

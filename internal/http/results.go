@@ -55,6 +55,8 @@ type ResultsPage struct {
 	Results              *DatasetResults
 	ModelResults         *ModelResults
 	VisualizationResults *VisualizationResults
+	ImageResults         *ImageResults
+	// RouteResults         *RouteResults
 }
 
 type ModelResults struct {
@@ -81,4 +83,25 @@ type VisualizationResults struct {
 	FeatureDistributions string `json:"feature_distributions"`
 	CorrelationHeatmap   string `json:"correlation_heatmap"`
 	ActualVsPredicted    string `json:"actual_vs_predicted"`
+}
+
+type ImageResults struct {
+	OriginalPath      string           `json:"original_path"`
+	ProcessedPath     string           `json:"processed_path"`
+	Operations        []string         `json:"operations"`
+	OriginalFormat    string           `json:"original_format"`
+	OriginalWidth     int              `json:"original_width"`
+	OriginalHeight    int              `json:"original_height"`
+	ResultFormat      string           `json:"result_format"`
+	ResultWidth       int              `json:"result_width"`
+	ResultHeight      int              `json:"result_height"`
+	Compression       *CompressionInfo `json:"compression,omitempty"`
+	Metadata          map[string]any   `json:"metadata,omitempty"`
+	MetadataReference string           `json:"metadata_reference,omitempty"`
+}
+
+type CompressionInfo struct {
+	OriginalSize     int64   `json:"original_size"`
+	ResultSize       int64   `json:"result_size"`
+	CompressionRatio float64 `json:"compression_ratio"`
 }
