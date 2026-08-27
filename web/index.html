@@ -1,17 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Data Processing Platform</title>
 </head>
-<body>
 
+<body>
     <header>
         <h1>Data Processing Platform</h1>
     </header>
 
     <main>
+        <!-- Dataset Processing -->
         <section>
             <h2>Dataset Analysis</h2>
 
@@ -45,8 +47,12 @@
 
                         <div>
                             <label for="model">Model:</label>
+
                             <select name="model" id="model">
-                                <option value="none" selected>None</option>
+                                <option value="none" selected>
+                                    None
+                                </option>
+
                                 <option value="random_forest_regressor">
                                     Random Forest Regressor
                                 </option>
@@ -54,25 +60,35 @@
                         </div>
 
                         <div id="modelOptions" hidden>
-
                             <br>
 
                             <div>
-                                <label for="configType">Configuration:</label>
+                                <label for="configType">
+                                    Configuration:
+                                </label>
+
                                 <select name="configType" id="configType">
                                     <option value="automatic" selected>
                                         Automatic
                                     </option>
-                                    <option value="manual">Manual</option>
+
+                                    <option value="manual">
+                                        Manual
+                                    </option>
                                 </select>
                             </div>
 
                             <br>
 
                             <div>
-                                <label for="target">Target variable:</label>
+                                <label for="target">
+                                    Target variable:
+                                </label>
+
                                 <select name="target" id="target">
-                                    <option value="">Select a target</option>
+                                    <option value="">
+                                        Select a target
+                                    </option>
                                 </select>
                             </div>
 
@@ -88,6 +104,7 @@
                                         value="automatic"
                                         checked
                                     >
+
                                     Automatic
                                 </label>
 
@@ -97,21 +114,24 @@
                                         name="featureSelection"
                                         value="manual"
                                     >
+
                                     Manual
                                 </label>
 
                                 <div id="manualFeatures" hidden>
                                     <p>Select the features to use:</p>
+
                                     <div id="featureList"></div>
                                 </div>
                             </fieldset>
 
                             <div id="manualConfig" hidden>
-
                                 <br>
 
                                 <fieldset>
-                                    <legend>Random Forest Parameters</legend>
+                                    <legend>
+                                        Random Forest Parameters
+                                    </legend>
 
                                     <div>
                                         <label for="n_estimators">
@@ -143,7 +163,6 @@
                                         >
                                     </div>
                                 </fieldset>
-
                             </div>
                         </div>
                     </section>
@@ -155,7 +174,9 @@
                         <h3>Dataset Visualizations</h3>
 
                         <fieldset>
-                            <legend>Select visualizations to generate</legend>
+                            <legend>
+                                Select visualizations to generate
+                            </legend>
 
                             <label>
                                 <input
@@ -163,6 +184,7 @@
                                     name="histograms"
                                     value="true"
                                 >
+
                                 Histograms
                             </label>
 
@@ -174,6 +196,7 @@
                                     name="box_plots"
                                     value="true"
                                 >
+
                                 Box Plots
                             </label>
 
@@ -185,12 +208,12 @@
                                     name="correlation_heatmap"
                                     value="true"
                                 >
+
                                 Correlation Heatmap
                             </label>
 
                             <!-- Only shown when a model is selected -->
                             <div id="modelVisualizationOptions" hidden>
-
                                 <br>
 
                                 <label>
@@ -199,9 +222,9 @@
                                         name="actual_vs_predicted"
                                         value="true"
                                     >
+
                                     Actual vs Predicted
                                 </label>
-
                             </div>
                         </fieldset>
                     </section>
@@ -211,13 +234,198 @@
                     <button type="submit" id="submitJob" disabled>
                         Submit Dataset Job
                     </button>
-
                 </form>
             </div>
         </section>
 
         <hr>
 
+        <!-- Image Processing -->
+        <section>
+            <h2>Image Processing</h2>
+
+            <div>
+                <label for="imageFile">
+                    Upload an image:
+                </label>
+
+                <input
+                    type="file"
+                    id="imageFile"
+                    name="imageFile"
+                    accept="image/*"
+                >
+            </div>
+
+            <div id="imageOptions" hidden>
+                <br>
+
+                <form action="/submit/image" method="post">
+                    <input
+                        type="hidden"
+                        name="uploadID"
+                        id="imageUploadID"
+                    >
+
+                    <fieldset>
+                        <legend>Image Processing Options</legend>
+
+                        <!-- Resize -->
+                        <div>
+                            <h3>Resize</h3>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="resize"
+                                    value="true"
+                                    id="resizeImage"
+                                >
+
+                                Resize image
+                            </label>
+
+                            <div id="resizeOptions" hidden>
+                                <br>
+
+                                <label for="resizeWidth">
+                                    Width:
+                                </label>
+
+                                <input
+                                    type="number"
+                                    id="resizeWidth"
+                                    name="resize_width"
+                                    min="1"
+                                >
+
+                                <br><br>
+
+                                <label for="resizeHeight">
+                                    Height:
+                                </label>
+
+                                <input
+                                    type="number"
+                                    id="resizeHeight"
+                                    name="resize_height"
+                                    min="1"
+                                >
+                            </div>
+                        </div>
+
+                        <br>
+
+                        <!-- Compression -->
+                        <div>
+                            <h3>Compression</h3>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="compression"
+                                    value="true"
+                                    id="compressImage"
+                                >
+
+                                Compress image
+                            </label>
+
+                            <div id="compressionOptions" hidden>
+                                <br>
+
+                                <label for="compressionQuality">
+                                    Quality:
+                                </label>
+
+                                <input
+                                    type="number"
+                                    id="compressionQuality"
+                                    name="compression_quality"
+                                    min="1"
+                                    max="100"
+                                    value="85"
+                                >
+                            </div>
+                        </div>
+
+                        <br>
+
+                        <!-- Format conversion -->
+                        <div>
+                            <h3>Format Conversion</h3>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="format_conversion"
+                                    value="true"
+                                    id="convertFormat"
+                                >
+
+                                Convert image format
+                            </label>
+
+                            <div id="formatOptions" hidden>
+                                <br>
+
+                                <label for="outputFormat">
+                                    Output format:
+                                </label>
+
+                                <select
+                                    name="output_format"
+                                    id="outputFormat"
+                                >
+                                    <option value="original">
+                                        Keep original format
+                                    </option>
+
+                                    <option value="jpeg">
+                                        JPEG
+                                    </option>
+
+                                    <option value="png">
+                                        PNG
+                                    </option>
+
+                                    <option value="webp">
+                                        WebP
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <br>
+
+                        <!-- Metadata extraction -->
+                        <div>
+                            <h3>Metadata</h3>
+
+                            <label>
+                                <input
+                                    type="checkbox"
+                                    name="extract_metadata"
+                                    value="true"
+                                >
+
+                                Extract image metadata
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <br>
+
+                    <button type="submit">
+                        Submit Image Job
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <hr>
+
+        <!-- Jobs -->
         <section>
             <h2>Jobs</h2>
 
@@ -234,11 +442,10 @@
             {{else}}
                 <p>No jobs yet.</p>
             {{end}}
-
         </section>
     </main>
 
     <script src="/static/js/dataset.js"></script>
-
 </body>
+
 </html>

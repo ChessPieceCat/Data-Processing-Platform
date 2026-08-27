@@ -30,7 +30,6 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	})
 
 	db := database.OpenDatabase()
-
 	if db == nil {
 		t.Fatal("OpenDatabase returned nil")
 	}
@@ -47,7 +46,7 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	return db
 }
 
-// createTestJob creates a job and registers cleanup for the database row.
+// createTestJob creates a dataset job and registers cleanup for the database row.
 func createTestJob(t *testing.T, db *sql.DB) int64 {
 	t.Helper()
 
@@ -113,7 +112,6 @@ func TestGetJobNotFound(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	_, err := GetJob(db, 999999999)
-
 	if err == nil {
 		t.Fatal("expected error for nonexistent job")
 	}
@@ -187,8 +185,8 @@ func TestStartJob(t *testing.T) {
 	}
 }
 
-// TestCompleteJob verifies that a job becomes completed and receives a
-// completion timestamp.
+// TestCompleteJob verifies that a job becomes completed and receives
+// a completion timestamp.
 func TestCompleteJob(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -229,6 +227,7 @@ func TestFailJob(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	jobID := createTestJob(t, db)
+
 	errorMessage := "test processing failure"
 
 	if err := failJob(db, jobID, errorMessage); err != nil {
@@ -265,6 +264,7 @@ func TestSaveResultReference(t *testing.T) {
 	db := setupTestDatabase(t)
 
 	jobID := createTestJob(t, db)
+
 	resultPath := "uploads/123/results.json"
 
 	if err := saveResultReference(
@@ -352,8 +352,8 @@ func TestValidateCSVMissingFile(t *testing.T) {
 	}
 }
 
-// TestGetCSVColumns verifies that the first CSV row is returned as the
-// column names.
+// TestGetCSVColumns verifies that the first CSV row is returned as
+// the column names.
 func TestGetCSVColumns(t *testing.T) {
 	filePath := filepath.Join(
 		t.TempDir(),
@@ -415,12 +415,60 @@ func TestGetCSVColumnsMissingFile(t *testing.T) {
 	}
 }
 
-// TestRunDatasetProcessorMissingInput verifies that processor failures are
+// TestFindProcessor verifies that the processor path can be found
+// from the repository root.
+func TestFindProcessor(t *testing.T) {
+	processorPath, err := findProcessor("dataset")
+	if err != nil {
+		t.Fatalf("findProcessor failed: %v", err)
+	}
+
+	expectedSuffix := filepath.Join(
+		"processors",
+		"dataset",
+		"main.py",
+	)
+
+	if !strings.HasSuffix(processorPath, expectedSuffix) {
+		t.Fatalf(
+			"expected processor path to end with %q, got %q",
+			expectedSuffix,
+			processorPath,
+		)
+	}
+
+	if _, err := os.Stat(processorPath); err != nil {
+		t.Fatalf(
+			"expected processor path to exist: %v",
+			err,
+		)
+	}
+}
+
+// TestFindProcessorMissing verifies that an unknown processor type
+// returns an error.
+func TestFindProcessorMissing(t *testing.T) {
+	_, err := findProcessor("does-not-exist")
+
+	if err == nil {
+		t.Fatal("expected findProcessor to return an error")
+	}
+
+	if !strings.Contains(err.Error(), "could not find processor") {
+		t.Fatalf(
+			"expected processor lookup error, got %v",
+			err,
+		)
+	}
+}
+
+// TestRunProcessorMissingInput verifies that processor failures are
 // returned with useful output.
-func TestRunDatasetProcessorMissingInput(t *testing.T) {
+func TestRunProcessorMissingInput(t *testing.T) {
 	jobID := int64(999999)
 
-	_, err := runDatasetProcessor(
+	_, err := runProcessor(
+		"dataset",
 		"does-not-exist.csv",
 		jobID,
 		"does-not-exist-config.json",
@@ -515,13 +563,16 @@ func TestProcessJobSuccess(t *testing.T) {
 
 	_, err := db.Exec(
 		`UPDATE jobs
-     SET input_reference = $1
-     WHERE id = $2`,
+		 SET input_reference = $1
+		 WHERE id = $2`,
 		inputPath,
 		jobID,
 	)
 	if err != nil {
-		t.Fatalf("failed to set input reference: %v", err)
+		t.Fatalf(
+			"failed to set input reference: %v",
+			err,
+		)
 	}
 
 	if err := ProcessJob(
@@ -597,7 +648,8 @@ func TestProcessJobSuccess(t *testing.T) {
 	}
 }
 
-// TestProcessJobFailure verifies that a job fails gracefully when the input file is missing.
+// TestProcessJobFailure verifies that a job fails gracefully when
+// the input file is missing.
 func TestProcessJobFailure(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -607,8 +659,8 @@ func TestProcessJobFailure(t *testing.T) {
 
 	_, err := db.Exec(
 		`UPDATE jobs
-         SET input_reference = $1
-         WHERE id = $2`,
+		 SET input_reference = $1
+		 WHERE id = $2`,
 		inputReference,
 		jobID,
 	)
@@ -655,7 +707,8 @@ func TestProcessJobFailure(t *testing.T) {
 	}
 }
 
-// TestProcessJobMissingInput verifies that a job without an input reference fails gracefully.
+// TestProcessJobMissingInput verifies that a job without an input
+// reference fails gracefully.
 func TestProcessJobMissingInput(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -678,11 +731,13 @@ func TestProcessJobMissingInput(t *testing.T) {
 	}
 }
 
-// TestEnqueueJob verifies that a job ID is correctly added to the Redis stream.
+// TestEnqueueJob verifies that a job ID is correctly added to
+// the Redis stream.
 func TestEnqueueJob(t *testing.T) {
 	redisClient := redisclient.NewClient(&redisclient.Options{
 		Addr: "localhost:6379",
 	})
+
 	defer redisClient.Close()
 
 	ctx := context.Background()
@@ -704,7 +759,10 @@ func TestEnqueueJob(t *testing.T) {
 		"+",
 	).Result()
 	if err != nil {
-		t.Fatalf("failed to read Redis stream: %v", err)
+		t.Fatalf(
+			"failed to read Redis stream: %v",
+			err,
+		)
 	}
 
 	var found bool
@@ -735,11 +793,15 @@ func TestEnqueueJob(t *testing.T) {
 	}
 
 	if !found {
-		t.Fatalf("expected job_id %d to be added to Redis stream", jobID)
+		t.Fatalf(
+			"expected job_id %d to be added to Redis stream",
+			jobID,
+		)
 	}
 }
 
-// TestProcessJobUnsupportedType verifies that a job with an unsupported type fails gracefully.
+// TestProcessJobUnsupportedType verifies that a job with an unsupported
+// type fails gracefully.
 func TestProcessJobUnsupportedType(t *testing.T) {
 	db := setupTestDatabase(t)
 
@@ -747,15 +809,18 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 
 	_, err := db.Exec(
 		`UPDATE jobs
-     SET type = $1,
-         input_reference = $2
-     WHERE id = $3`,
+		 SET type = $1,
+		     input_reference = $2
+		 WHERE id = $3`,
 		"unsupported",
 		"test-input.csv",
 		jobID,
 	)
 	if err != nil {
-		t.Fatalf("failed to update job: %v", err)
+		t.Fatalf(
+			"failed to update job: %v",
+			err,
+		)
 	}
 
 	err = ProcessJob(db, jobID)
@@ -766,10 +831,10 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 
 	if !strings.Contains(
 		err.Error(),
-		"unsupported job type",
+		"could not find processor",
 	) {
 		t.Fatalf(
-			"expected unsupported job type error, got %v",
+			"expected processor lookup error, got %v",
 			err,
 		)
 	}
@@ -784,7 +849,7 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 
 	if job.Status != "failed" {
 		t.Fatalf(
-			"expected status failed, got %q",
+			"expected status failed when processor lookup fails, got %q",
 			job.Status,
 		)
 	}

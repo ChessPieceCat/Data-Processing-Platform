@@ -52,146 +52,24 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 // ResultsHandler handles the results page.
 func ResultsHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		jobIDInt, err := parseJobID(r)
+		jobID, err := parseJobID(r)
 		if err != nil {
 			http.Error(w, "Invalid job ID", http.StatusBadRequest)
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := jobs.GetJob(db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				http.Error(w, fmt.Sprintf("job with ID %d not found", jobIDInt), http.StatusNotFound)
-				return
-			}
-
-			log.Printf("Error retrieving job %d: %v", jobIDInt, err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		page := ResultsPage{Job: job}
-
-		if job.Status == "completed" && job.ResultReference != nil {
-			page.Results, err = loadDatasetResults(*job.ResultReference)
-			if err != nil {
-				log.Println("Error loading result JSON:", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-			page.VisualizationResults = page.Results.Visualizations
-
-			// If the job has model results, populate them as well.
-			page.ModelResults, err = loadModelResults(job.ID)
-			if err != nil {
-				log.Println("Error loading model results:", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-		}
-
-		if err := ResultsTemplate.Execute(w, page); err != nil {
-			log.Println("Error executing results template:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-	}
-}
-
-// DatasetSubmissionHandler handles job submission.
-func DatasetSubmissionHandler(db *sql.DB, redisClient *redis.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Get the temporary upload ID.
-		uploadID := r.FormValue("uploadID")
-
-		// Find the temporary dataset.
-		tempPath, err := getTemporaryDataset(uploadID)
-		if err != nil {
-			switch {
-			case errors.Is(err, errDatasetNotInspected):
-				http.Error(w, "Dataset has not been inspected.", http.StatusBadRequest)
-			case errors.Is(err, errInvalidUploadID):
-				http.Error(w, "Invalid upload ID.", http.StatusBadRequest)
-			case errors.Is(err, os.ErrNotExist):
-				http.Error(w, "Temporary dataset was not found.", http.StatusBadRequest)
-			default:
-				log.Println("Error checking temporary dataset:", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-			}
-			return
-		}
-
-		// Read the model configuration.
-		config, err := getDatasetConfig(r)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		// Create the job.
-		jobID, err := jobs.CreateJob(db, "dataset")
-		if err != nil {
-			log.Println("Error creating job:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		jobDirectory := fmt.Sprintf("uploads/%d", jobID)
-		filePath := filepath.Join(jobDirectory, "dataset.csv")
-
-		// Create the directory for this job.
-		if err := os.MkdirAll(jobDirectory, 0755); err != nil {
-			log.Println("Error creating job directory:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// Move the temporary dataset into the job directory.
-		if err := os.Rename(tempPath, filePath); err != nil {
-			os.RemoveAll(jobDirectory)
-			log.Println("Error moving dataset file:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Moved temporary dataset to %s for job %d", filePath, jobID)
-
-		// Save the input reference.
-		if err := saveInputReference(db, filePath, jobID); err != nil {
-			os.RemoveAll(jobDirectory)
-			log.Println("Error updating job input reference:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// Save the processing configuration.
-		configPath, err := jobs.SaveDatasetConfig(config, jobID)
-		if err != nil {
-			os.RemoveAll(jobDirectory)
-			log.Println("Error saving dataset configuration:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		log.Printf("Saved dataset configuration for job %d at %s", jobID, configPath)
-
-		// Enqueue the job ID in Redis for processing by the worker.
-		if err := jobs.EnqueueJob(redisClient, jobID); err != nil {
-			log.Printf("Error enqueuing job %d: %v", jobID, err)
-
-			if deleteErr := jobs.DeleteJob(db, jobID); deleteErr != nil {
-				log.Printf(
-					"Error cleaning up job %d after enqueue failure: %v",
-					jobID,
-					deleteErr,
+				http.Error(
+					w,
+					fmt.Sprintf("job with ID %d not found", jobID),
+					http.StatusNotFound,
 				)
+				return
 			}
 
+			log.Printf("Error retrieving job %d: %v", jobID, err)
 			http.Error(
 				w,
 				"Internal server error",
@@ -200,8 +78,543 @@ func DatasetSubmissionHandler(db *sql.DB, redisClient *redis.Client) http.Handle
 			return
 		}
 
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		page := ResultsPage{
+			Job: job,
+		}
+
+		switch job.Type {
+		case "dataset":
+			if err := loadDatasetPageResults(&page); err != nil {
+				log.Printf(
+					"Error loading dataset results for job %d: %v",
+					jobID,
+					err,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+			if err := DatasetResultsTemplate.Execute(w, page); err != nil {
+				log.Printf(
+					"Error executing dataset results template: %v",
+					err,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+			}
+
+		case "image":
+			if err := loadImagePageResults(&page); err != nil {
+				log.Printf(
+					"Error loading image results for job %d: %v",
+					jobID,
+					err,
+				)
+
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+			if err := ImageResultsTemplate.Execute(w, page); err != nil {
+				log.Printf(
+					"Error executing image results template: %v",
+					err,
+				)
+
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+		case "route":
+			if err := RouteResultsTemplate.Execute(w, page); err != nil {
+				log.Printf(
+					"Error executing route results template: %v",
+					err,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+			}
+
+		default:
+			log.Printf("Unsupported job type: %s", job.Type)
+			http.Error(
+				w,
+				"Unsupported job type",
+				http.StatusInternalServerError,
+			)
+		}
 	}
+}
+
+func loadDatasetPageResults(page *ResultsPage) error {
+	if page.Job.Status != "completed" ||
+		page.Job.ResultReference == nil {
+		return nil
+	}
+
+	results, err := loadDatasetResults(
+		*page.Job.ResultReference,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to load dataset results: %w",
+			err,
+		)
+	}
+
+	page.Results = results
+	page.VisualizationResults = results.Visualizations
+
+	modelResults, err := loadModelResults(page.Job.ID)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to load model results: %w",
+			err,
+		)
+	}
+
+	page.ModelResults = modelResults
+
+	return nil
+}
+
+// loadImagePageResults loads image-processing results for a completed job.
+func loadImagePageResults(page *ResultsPage) error {
+	if page.Job.Status != "completed" ||
+		page.Job.ResultReference == nil {
+		return nil
+	}
+
+	results, err := loadImageResults(
+		*page.Job.ResultReference,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to load image results: %w",
+			err,
+		)
+	}
+
+	page.ImageResults = results
+
+	return nil
+}
+
+// prepareJob creates the job directory, moves the input file,
+// and saves the input reference.
+func prepareJob(
+	db *sql.DB,
+	jobType string,
+	sourcePath string,
+	filename string,
+) (int64, string, error) {
+	jobID, err := jobs.CreateJob(db, jobType)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to create job: %w", err)
+	}
+
+	jobDirectory := fmt.Sprintf("uploads/%d", jobID)
+
+	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to create job directory: %w",
+			err,
+		)
+	}
+
+	inputPath := filepath.Join(
+		jobDirectory,
+		filename,
+	)
+
+	if err := os.Rename(sourcePath, inputPath); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to move input file: %w",
+			err,
+		)
+	}
+
+	if err := saveInputReference(db, inputPath, jobID); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to save input reference: %w",
+			err,
+		)
+	}
+
+	return jobID, inputPath, nil
+}
+
+// finalizeJobSubmission saves the job configuration and enqueues the job.
+func finalizeJobSubmission(
+	db *sql.DB,
+	redisClient *redis.Client,
+	jobID int64,
+	saveConfig func(int64) (string, error),
+) error {
+	if _, err := saveConfig(jobID); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return fmt.Errorf(
+			"failed to save job configuration: %w",
+			err,
+		)
+	}
+
+	if err := jobs.EnqueueJob(redisClient, jobID); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return fmt.Errorf(
+			"failed to enqueue job: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
+// DatasetSubmissionHandler handles dataset job submission.
+func DatasetSubmissionHandler(
+	db *sql.DB,
+	redisClient *redis.Client,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		uploadID := r.FormValue("uploadID")
+
+		tempPath, err := getTemporaryDataset(uploadID)
+		if err != nil {
+			switch {
+			case errors.Is(err, errDatasetNotInspected):
+				http.Error(
+					w,
+					"Dataset has not been inspected.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, errInvalidUploadID):
+				http.Error(
+					w,
+					"Invalid upload ID.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, os.ErrNotExist):
+				http.Error(
+					w,
+					"Temporary dataset was not found.",
+					http.StatusBadRequest,
+				)
+
+			default:
+				log.Println(
+					"Error checking temporary dataset:",
+					err,
+				)
+
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+			}
+
+			return
+		}
+
+		config, err := getDatasetConfig(r)
+		if err != nil {
+			http.Error(
+				w,
+				err.Error(),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		jobID, filePath, err := prepareJob(
+			db,
+			"dataset",
+			tempPath,
+			"dataset.csv",
+		)
+		if err != nil {
+			log.Println("Error preparing dataset job:", err)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+
+			return
+		}
+
+		log.Printf(
+			"Moved temporary dataset to %s for job %d",
+			filePath,
+			jobID,
+		)
+
+		if err := finalizeJobSubmission(
+			db,
+			redisClient,
+			jobID,
+			func(jobID int64) (string, error) {
+				return jobs.SaveDatasetConfig(
+					config,
+					jobID,
+				)
+			},
+		); err != nil {
+			log.Printf(
+				"Error finalizing dataset job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+
+			return
+		}
+
+		http.Redirect(
+			w,
+			r,
+			"/",
+			http.StatusSeeOther,
+		)
+	}
+}
+
+// ImageSubmissionHandler handles image job submission.
+func ImageSubmissionHandler(
+	db *sql.DB,
+	redisClient *redis.Client,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		// Get the temporary upload ID.
+		uploadID := r.FormValue("uploadID")
+
+		// Find the temporary image.
+		tempPath, err := getTemporaryImage(uploadID)
+		if err != nil {
+			switch {
+			case errors.Is(err, errImageNotInspected):
+				http.Error(
+					w,
+					"Image has not been inspected.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, errInvalidUploadID):
+				http.Error(
+					w,
+					"Invalid upload ID.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, os.ErrNotExist):
+				http.Error(
+					w,
+					"Temporary image was not found.",
+					http.StatusBadRequest,
+				)
+
+			default:
+				log.Println(
+					"Error checking temporary image:",
+					err,
+				)
+
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+			}
+
+			return
+		}
+
+		// Read the image configuration.
+		config, err := getImageConfig(r)
+		if err != nil {
+			http.Error(
+				w,
+				err.Error(),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Prepare the job and move the image into its job directory.
+		jobID, filePath, err := prepareJob(
+			db,
+			"image",
+			tempPath,
+			"input"+filepath.Ext(tempPath),
+		)
+		if err != nil {
+			log.Println(
+				"Error preparing image job:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+
+			return
+		}
+
+		log.Printf(
+			"Moved temporary image to %s for job %d",
+			filePath,
+			jobID,
+		)
+
+		// Save the configuration and enqueue the job.
+		if err := finalizeJobSubmission(
+			db,
+			redisClient,
+			jobID,
+			func(jobID int64) (string, error) {
+				return jobs.SaveImageConfig(
+					config,
+					jobID,
+				)
+			},
+		); err != nil {
+			log.Printf(
+				"Error finalizing image job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+
+			return
+		}
+
+		http.Redirect(
+			w,
+			r,
+			"/",
+			http.StatusSeeOther,
+		)
+	}
+}
+
+func getImageConfig(
+	r *http.Request,
+) (jobs.ImageConfig, error) {
+	config := jobs.ImageConfig{
+		Resize:           r.FormValue("resize") == "true",
+		Compression:      r.FormValue("compression") == "true",
+		FormatConversion: r.FormValue("format_conversion") == "true",
+		ExtractMetadata:  r.FormValue("extract_metadata") == "true",
+		OutputFormat:     r.FormValue("output_format"),
+	}
+
+	if config.Resize {
+		width, err := strconv.Atoi(
+			r.FormValue("resize_width"),
+		)
+		if err != nil || width <= 0 {
+			return jobs.ImageConfig{}, fmt.Errorf(
+				"resize width must be a positive integer",
+			)
+		}
+
+		height, err := strconv.Atoi(
+			r.FormValue("resize_height"),
+		)
+		if err != nil || height <= 0 {
+			return jobs.ImageConfig{}, fmt.Errorf(
+				"resize height must be a positive integer",
+			)
+		}
+
+		config.ResizeWidth = width
+		config.ResizeHeight = height
+	}
+
+	if config.Compression {
+		quality, err := strconv.Atoi(
+			r.FormValue("compression_quality"),
+		)
+		if err != nil || quality < 1 || quality > 100 {
+			return jobs.ImageConfig{}, fmt.Errorf(
+				"compression quality must be between 1 and 100",
+			)
+		}
+
+		config.CompressionQuality = quality
+	}
+
+	if config.FormatConversion {
+		switch config.OutputFormat {
+		case "jpeg", "png", "webp":
+		default:
+			return jobs.ImageConfig{}, fmt.Errorf(
+				"unsupported output format: %q",
+				config.OutputFormat,
+			)
+		}
+	}
+
+	return config, nil
 }
 
 // DownloadResultsHandler handles downloading a job's results.
@@ -408,6 +821,157 @@ func DatasetInspectionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ImageUploadHandler handles image uploads for image processing jobs.
+func ImageUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method not allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	// Limit the total request size.
+	r.Body = http.MaxBytesReader(
+		w,
+		r.Body,
+		MaxUploadSize,
+	)
+
+	// Retrieve the uploaded file.
+	file, header, err := r.FormFile("imageFile")
+	if err != nil {
+		log.Println("Error retrieving image:", err)
+
+		http.Error(
+			w,
+			"An image file is required.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+	defer file.Close()
+
+	// Reject empty files.
+	if header.Size == 0 {
+		http.Error(
+			w,
+			"The uploaded image is empty.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Validate the image extension.
+	extension := strings.ToLower(
+		filepath.Ext(header.Filename),
+	)
+
+	switch extension {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		// Supported image format.
+	default:
+		http.Error(
+			w,
+			"Unsupported image format.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Create the temporary upload directory.
+	if err := os.MkdirAll(
+		temporaryUploadDirectory,
+		0755,
+	); err != nil {
+		log.Println(
+			"Error creating temporary upload directory:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	uploadID := uuid.New().String()
+
+	tempPath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+extension,
+	)
+
+	// Create a temporary file.
+	tempFile, err := os.Create(tempPath)
+	if err != nil {
+		log.Println(
+			"Error creating temporary image file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	// Save the uploaded image.
+	if _, err := io.Copy(tempFile, file); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+
+		log.Println(
+			"Error saving temporary image:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+
+		log.Println(
+			"Error closing temporary image file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	w.Header().Set(
+		"Content-Type",
+		"application/json",
+	)
+
+	if err := json.NewEncoder(w).Encode(
+		inspectionResponse{
+			UploadID: uploadID,
+		},
+	); err != nil {
+		log.Println(
+			"Error encoding image upload response:",
+			err,
+		)
+	}
+}
+
 // parseJobID parses the job ID from a request.
 func parseJobID(r *http.Request) (int64, error) {
 	jobID := r.URL.Query().Get("id")
@@ -423,6 +987,23 @@ func loadDatasetResults(resultPath string) (*DatasetResults, error) {
 	defer resultFile.Close()
 
 	var results DatasetResults
+	if err := json.NewDecoder(resultFile).Decode(&results); err != nil {
+		return nil, err
+	}
+
+	return &results, nil
+}
+
+// loadImageResults loads image-processing results from a result JSON file.
+func loadImageResults(resultPath string) (*ImageResults, error) {
+	resultFile, err := os.Open(resultPath)
+	if err != nil {
+		return nil, err
+	}
+	defer resultFile.Close()
+
+	var results ImageResults
+
 	if err := json.NewDecoder(resultFile).Decode(&results); err != nil {
 		return nil, err
 	}
@@ -472,6 +1053,36 @@ func getTemporaryDataset(uploadID string) (string, error) {
 	}
 
 	return tempPath, nil
+}
+
+var errImageNotInspected = errors.New("image has not been inspected")
+
+// getTemporaryImage validates the upload ID and returns the temporary image path.
+func getTemporaryImage(uploadID string) (string, error) {
+	if uploadID == "" {
+		return "", errImageNotInspected
+	}
+
+	// Make sure the upload ID is a valid UUID.
+	if _, err := uuid.Parse(uploadID); err != nil {
+		return "", errInvalidUploadID
+	}
+
+	matches, err := filepath.Glob(
+		filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+".*",
+		),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if len(matches) == 0 {
+		return "", os.ErrNotExist
+	}
+
+	return matches[0], nil
 }
 
 // getDatasetConfig reads the processing configuration from the request.
@@ -614,5 +1225,189 @@ func VisualizationHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		http.ServeFile(w, r, visualizationPath)
+	}
+}
+
+// ImageResultHandler serves original or processed images for a completed job.
+func ImageResultHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		jobID, err := parseJobID(r)
+		if err != nil {
+			http.Error(
+				w,
+				"Invalid job ID",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		job, err := jobs.GetJob(db, jobID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(
+					w,
+					fmt.Sprintf("job with ID %d not found", jobID),
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			log.Printf(
+				"Error retrieving job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if job.Type != "image" {
+			http.Error(
+				w,
+				"Job is not an image job.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if job.Status != "completed" ||
+			job.ResultReference == nil {
+			http.Error(
+				w,
+				"Image results are not available.",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		results, err := loadImageResults(
+			*job.ResultReference,
+		)
+		if err != nil {
+			log.Printf(
+				"Error loading image results for job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Image results could not be loaded.",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		imageType := r.URL.Query().Get("type")
+
+		var imagePath string
+
+		switch imageType {
+		case "original":
+			imagePath = results.OriginalPath
+
+		case "processed":
+			imagePath = results.ProcessedPath
+
+		default:
+			http.Error(
+				w,
+				"Unknown image type.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		jobDirectory := filepath.Join(
+			"uploads",
+			strconv.FormatInt(jobID, 10),
+		)
+
+		absoluteJobDirectory, err := filepath.Abs(jobDirectory)
+		if err != nil {
+			log.Println(
+				"Error resolving job directory:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		absoluteImagePath, err := filepath.Abs(imagePath)
+		if err != nil {
+			log.Println(
+				"Error resolving image path:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		relativePath, err := filepath.Rel(
+			absoluteJobDirectory,
+			absoluteImagePath,
+		)
+		if err != nil || relativePath == ".." ||
+			strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) {
+			http.Error(
+				w,
+				"Invalid image path.",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if _, err := os.Stat(absoluteImagePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(
+					w,
+					"Requested image is not available.",
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			log.Println(
+				"Error checking image file:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		http.ServeFile(
+			w,
+			r,
+			absoluteImagePath,
+		)
 	}
 }
