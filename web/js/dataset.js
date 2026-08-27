@@ -27,6 +27,7 @@ const compressImageCheckbox = document.getElementById("compressImage");
 const compressionOptions = document.getElementById("compressionOptions");
 const convertFormatCheckbox = document.getElementById("convertFormat");
 const formatOptions = document.getElementById("formatOptions");
+const outputFormat = document.getElementById("outputFormat");
 
 
 // Upload the selected image and show processing options.
@@ -36,6 +37,7 @@ if (imageFileInput && imageOptions) {
 
         if (!file) {
             imageOptions.hidden = true;
+            imageUploadID.value = "";
             return;
         }
 
@@ -80,8 +82,16 @@ if (resizeImageCheckbox && resizeOptions) {
 // Show or hide compression options.
 if (compressImageCheckbox && compressionOptions) {
     compressImageCheckbox.addEventListener("change", () => {
-        compressionOptions.hidden = !compressImageCheckbox.checked;
+        updateImageCompressionOptions();
     });
+}
+
+// Update the visibility of compression options based on the selected output format.
+if (outputFormat) {
+    outputFormat.addEventListener(
+        "change",
+        updateImageCompressionOptions
+    );
 }
 
 
@@ -89,6 +99,7 @@ if (compressImageCheckbox && compressionOptions) {
 if (convertFormatCheckbox && formatOptions) {
     convertFormatCheckbox.addEventListener("change", () => {
         formatOptions.hidden = !convertFormatCheckbox.checked;
+        updateImageCompressionOptions();
     });
 }
 
@@ -107,12 +118,44 @@ if (resizeOptions) {
         !resizeImageCheckbox || !resizeImageCheckbox.checked;
 }
 
-if (compressionOptions) {
-    compressionOptions.hidden =
-        !compressImageCheckbox || !compressImageCheckbox.checked;
-}
-
 if (formatOptions) {
     formatOptions.hidden =
         !convertFormatCheckbox || !convertFormatCheckbox.checked;
+}
+
+updateImageCompressionOptions();
+
+// Update the visibility of compression options based on the selected output format.
+function updateImageCompressionOptions() {
+    if (!compressionOptions || !compressImageCheckbox) {
+        return;
+    }
+
+    if (!compressImageCheckbox.checked) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    const file = imageFileInput?.files[0];
+
+    const originalIsPng =
+        file && file.type === "image/png";
+
+    const convertingToPng =
+        convertFormatCheckbox &&
+        convertFormatCheckbox.checked &&
+        outputFormat &&
+        outputFormat.value === "png";
+
+    if (originalIsPng && !convertFormatCheckbox.checked) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    if (convertingToPng) {
+        compressionOptions.hidden = true;
+        return;
+    }
+
+    compressionOptions.hidden = false;
 }

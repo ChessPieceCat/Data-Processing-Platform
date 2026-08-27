@@ -729,6 +729,147 @@ func DownloadModelHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// DownloadImageMetadataHandler handles downloading an image job's full metadata.
+func DownloadImageMetadataHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		jobID, err := parseJobID(r)
+		if err != nil {
+			http.Error(
+				w,
+				"Invalid job ID",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		job, err := jobs.GetJob(db, jobID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(
+					w,
+					fmt.Sprintf("job with ID %d not found", jobID),
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			log.Printf(
+				"Error retrieving job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if job.Type != "image" {
+			http.Error(
+				w,
+				"Job is not an image job.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if job.Status != "completed" ||
+			job.ResultReference == nil {
+			http.Error(
+				w,
+				"Image results are not available.",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		results, err := loadImageResults(
+			*job.ResultReference,
+		)
+		if err != nil {
+			log.Printf(
+				"Error loading image results for job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Image results could not be loaded.",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if results.MetadataReference == "" {
+			http.Error(
+				w,
+				"Image metadata is not available.",
+				http.StatusNotFound,
+			)
+			return
+		}
+
+		metadataFile, err := os.Open(results.MetadataReference)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(
+					w,
+					"Image metadata is not available.",
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			log.Printf(
+				"Error opening metadata file for job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+		defer metadataFile.Close()
+
+		w.Header().Set(
+			"Content-Disposition",
+			fmt.Sprintf(
+				`attachment; filename="job_%s_metadata.json"`,
+				strconv.FormatInt(jobID, 10),
+			),
+		)
+
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
+		)
+
+		if _, err := io.Copy(w, metadataFile); err != nil {
+			log.Printf(
+				"Error sending metadata file: %v",
+				err,
+			)
+		}
+	}
+}
+
 // DatasetInspectionHandler handles dataset inspection.
 func DatasetInspectionHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

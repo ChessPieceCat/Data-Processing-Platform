@@ -80,6 +80,7 @@ func main() {
 	// Handle the download of result files.
 	http.HandleFunc("/results/download", apphttp.DownloadResultsHandler(db))
 	http.HandleFunc("/results/download/model", apphttp.DownloadModelHandler(db))
+	http.HandleFunc("/results/download/metadata", apphttp.DownloadImageMetadataHandler(db))
 
 	// Handle dataset inspection.
 	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)

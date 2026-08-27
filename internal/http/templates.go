@@ -382,21 +382,23 @@ var ImageResultsTemplate = template.Must(
     <section>
         <h2>Images</h2>
 
-        <h3>Original Image</h3>
+        <div>
+            <h3>Original Image</h3>
+            <img
+                src="/results/image?id={{.Job.ID}}&type=original"
+                alt="Original image"
+                style="max-width: 100%;"
+            >
+        </div>
 
-        <img
-            src="/results/image?id={{.Job.ID}}&type=original"
-            alt="Original image"
-            style="max-width: 100%;"
-        >
-
-        <h3>Processed Image</h3>
-
-        <img
-            src="/results/image?id={{.Job.ID}}&type=processed"
-            alt="Processed image"
-            style="max-width: 100%;"
-        >
+        <div>
+            <h3>Processed Image</h3>
+            <img
+                src="/results/image?id={{.Job.ID}}&type=processed"
+                alt="Processed image"
+                style="max-width: 100%;"
+            >
+        </div>
     </section>
 
     <section>
@@ -472,7 +474,29 @@ var ImageResultsTemplate = template.Must(
             <dd>{{$value}}</dd>
             {{end}}
         </dl>
+
+        {{if .ImageResults.MetadataReference}}
+        <p>
+            <a href="/results/download/metadata?id={{.Job.ID}}">
+                Download Full Metadata
+            </a>
+        </p>
+        {{end}}
     </section>
+    {{else}}
+        {{if .ImageResults.MetadataReference}}
+        <section>
+            <h2>Metadata</h2>
+            <p>
+                Full metadata was extracted but is not displayed in the
+                results summary.
+            </p>
+
+            <a href="/results/download/metadata?id={{.Job.ID}}">
+                Download Full Metadata
+            </a>
+        </section>
+        {{end}}
     {{end}}
 
     {{else}}

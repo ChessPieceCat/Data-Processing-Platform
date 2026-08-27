@@ -86,17 +86,18 @@ type VisualizationResults struct {
 }
 
 type ImageResults struct {
-	OriginalPath   string            `json:"original_path"`
-	ProcessedPath  string            `json:"processed_path"`
-	Operations     []string          `json:"operations"`
-	OriginalFormat string            `json:"original_format"`
-	OriginalWidth  int               `json:"original_width"`
-	OriginalHeight int               `json:"original_height"`
-	ResultFormat   string            `json:"result_format"`
-	ResultWidth    int               `json:"result_width"`
-	ResultHeight   int               `json:"result_height"`
-	Compression    *CompressionInfo  `json:"compression,omitempty"`
-	Metadata       map[string]string `json:"metadata,omitempty"`
+	OriginalPath      string           `json:"original_path"`
+	ProcessedPath     string           `json:"processed_path"`
+	Operations        []string         `json:"operations"`
+	OriginalFormat    string           `json:"original_format"`
+	OriginalWidth     int              `json:"original_width"`
+	OriginalHeight    int              `json:"original_height"`
+	ResultFormat      string           `json:"result_format"`
+	ResultWidth       int              `json:"result_width"`
+	ResultHeight      int              `json:"result_height"`
+	Compression       *CompressionInfo `json:"compression,omitempty"`
+	Metadata          map[string]any   `json:"metadata,omitempty"`
+	MetadataReference string           `json:"metadata_reference,omitempty"`
 }
 
 type CompressionInfo struct {
