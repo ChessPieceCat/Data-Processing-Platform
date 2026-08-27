@@ -13,6 +13,7 @@
     </header>
 
     <main>
+
         <!-- Dataset Processing -->
         <section>
             <h2>Dataset Analysis</h2>
@@ -34,11 +35,9 @@
 
             <div id="datasetInfo" hidden>
                 <h3>Dataset Columns</h3>
-
                 <p id="datasetStatus"></p>
 
                 <form action="/submit/dataset" method="post">
-
                     <input type="hidden" name="uploadID" id="uploadID">
 
                     <!-- Model configuration -->
@@ -47,7 +46,6 @@
 
                         <div>
                             <label for="model">Model:</label>
-
                             <select name="model" id="model">
                                 <option value="none" selected>
                                     None
@@ -104,7 +102,6 @@
                                         value="automatic"
                                         checked
                                     >
-
                                     Automatic
                                 </label>
 
@@ -114,13 +111,11 @@
                                         name="featureSelection"
                                         value="manual"
                                     >
-
                                     Manual
                                 </label>
 
                                 <div id="manualFeatures" hidden>
                                     <p>Select the features to use:</p>
-
                                     <div id="featureList"></div>
                                 </div>
                             </fieldset>
@@ -184,7 +179,6 @@
                                     name="histograms"
                                     value="true"
                                 >
-
                                 Histograms
                             </label>
 
@@ -196,7 +190,6 @@
                                     name="box_plots"
                                     value="true"
                                 >
-
                                 Box Plots
                             </label>
 
@@ -208,7 +201,6 @@
                                     name="correlation_heatmap"
                                     value="true"
                                 >
-
                                 Correlation Heatmap
                             </label>
 
@@ -222,7 +214,6 @@
                                         name="actual_vs_predicted"
                                         value="true"
                                     >
-
                                     Actual vs Predicted
                                 </label>
                             </div>
@@ -281,7 +272,6 @@
                                     value="true"
                                     id="resizeImage"
                                 >
-
                                 Resize image
                             </label>
 
@@ -327,7 +317,6 @@
                                     value="true"
                                     id="compressImage"
                                 >
-
                                 Compress image
                             </label>
 
@@ -403,7 +392,6 @@
                                     name="extract_metadata"
                                     value="true"
                                 >
-
                                 Extract image metadata
                             </label>
                         </div>
@@ -416,6 +404,167 @@
                     </button>
                 </form>
             </div>
+        </section>
+
+        <hr>
+
+        <!-- Route Optimization -->
+        <section>
+            <h2>Route Optimization</h2>
+
+            <form action="/submit/route" method="post">
+                <input
+                    type="hidden"
+                    name="uploadID"
+                    id="routeUploadID"
+                >
+
+                <fieldset>
+                    <legend>Route Input</legend>
+
+                    <div>
+                        <label for="routeFile">
+                            Route CSV:
+                        </label>
+
+                        <input
+                            type="file"
+                            id="routeFile"
+                            name="routeFile"
+                            accept=".csv"
+                            required
+                        >
+                    </div>
+
+                    <br>
+
+                    <div>
+                        <label for="distanceFile">
+                            Distance Table CSV:
+                        </label>
+
+                        <input
+                            type="file"
+                            id="distanceFile"
+                            name="distanceFile"
+                            accept=".csv"
+                            required
+                        >
+                    </div>
+                </fieldset>
+
+                <br>
+
+                <fieldset id="routeOptions" hidden>
+                    <legend>Route Configuration</legend>
+
+                    <div>
+                        <label for="startLocation">
+                            Starting location:
+                        </label>
+
+                        <select
+                            name="start_location"
+                            id="startLocation"
+                            required
+                        >
+                            <option value="">
+                                Select a starting location
+                            </option>
+                        </select>
+                    </div>
+
+                    <br>
+
+                    <div>
+                        <label for="endLocation">
+                            Ending location:
+                        </label>
+
+                        <select
+                            name="end_location"
+                            id="endLocation"
+                        >
+                            <option value="">
+                                Same as starting location
+                            </option>
+                        </select>
+
+                        <p>
+                            Leave this unchanged to return to the
+                            starting location.
+                        </p>
+                    </div>
+
+                    <br>
+
+                    <div>
+                        <label for="routeAlgorithm">
+                            Algorithm:
+                        </label>
+
+                        <select
+                            name="algorithm"
+                            id="routeAlgorithm"
+                            required
+                        >
+                            <option
+                                value="nearest_neighbor_2opt"
+                                selected
+                            >
+                                Nearest Neighbor + 2-opt
+                            </option>
+                        </select>
+                    </div>
+
+                    <br>
+
+                    <fieldset>
+                        <legend>Constraints</legend>
+
+                        <div>
+                            <label for="maxDistance">
+                                Maximum distance:
+                            </label>
+
+                            <input
+                                type="number"
+                                id="maxDistance"
+                                name="max_distance"
+                                min="0"
+                                step="any"
+                                placeholder="Optional"
+                            >
+                        </div>
+
+                        <br>
+
+                        <div>
+                            <label for="maxStops">
+                                Maximum stops:
+                            </label>
+
+                            <input
+                                type="number"
+                                id="maxStops"
+                                name="max_stops"
+                                min="1"
+                                placeholder="Optional"
+                            >
+                        </div>
+                    </fieldset>
+                </fieldset>
+
+                <br>
+
+                <button
+                    type="submit"
+                    id="submitRouteJob"
+                    disabled
+                >
+                    Submit Route Job
+                </button>
+            </form>
         </section>
 
         <hr>
@@ -438,6 +587,7 @@
                 <p>No jobs yet.</p>
             {{end}}
         </section>
+
     </main>
 
     <script src="/static/js/dataset.js"></script>

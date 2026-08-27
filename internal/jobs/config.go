@@ -117,3 +117,69 @@ func LoadImageConfig(
 
 	return config, nil
 }
+
+type RouteConfig struct {
+	StartLocation string                  `json:"start_location"`
+	EndLocation   string                  `json:"end_location,omitempty"`
+	Optimization  RouteOptimizationConfig `json:"optimization"`
+	Constraints   RouteConstraintConfig   `json:"constraints,omitempty"`
+}
+
+type RouteOptimizationConfig struct {
+	Algorithm string `json:"algorithm"`
+}
+
+type RouteConstraintConfig struct {
+	MaxDistance *float64 `json:"max_distance,omitempty"`
+	MaxStops    *int     `json:"max_stops,omitempty"`
+}
+
+func SaveRouteConfig(
+	config RouteConfig,
+	jobID int64,
+) (string, error) {
+	configPath := fmt.Sprintf(
+		"uploads/%d/config.json",
+		jobID,
+	)
+
+	data, err := json.MarshalIndent(
+		config,
+		"",
+		"  ",
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		return "", err
+	}
+
+	return configPath, nil
+}
+
+func LoadRouteConfig(
+	configPath string,
+) (RouteConfig, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return RouteConfig{}, err
+	}
+
+	var config RouteConfig
+
+	if err := json.Unmarshal(
+		data,
+		&config,
+	); err != nil {
+		return RouteConfig{}, err
+	}
+
+	return config, nil
+}

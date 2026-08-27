@@ -135,7 +135,6 @@ func runProcessor(
 	jobID int64,
 	configPath string,
 ) (string, error) {
-
 	resultPath := fmt.Sprintf(
 		"uploads/%d/results.json",
 		jobID,
@@ -146,12 +145,39 @@ func runProcessor(
 		return "", err
 	}
 
-	cmd := exec.Command(
-		"python3",
+	args := []string{
 		processorPath,
 		filePath,
+	}
+
+	if processorType == "route" {
+		distancePath := filepath.Join(
+			filepath.Dir(filePath),
+			"distances.csv",
+		)
+
+		if _, err := os.Stat(distancePath); err != nil {
+			return "", fmt.Errorf(
+				"route distance file not found: %w",
+				err,
+			)
+		}
+
+		args = append(
+			args,
+			distancePath,
+		)
+	}
+
+	args = append(
+		args,
 		resultPath,
 		configPath,
+	)
+
+	cmd := exec.Command(
+		"python3",
+		args...,
 	)
 
 	output, err := cmd.CombinedOutput()

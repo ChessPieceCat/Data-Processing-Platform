@@ -141,6 +141,20 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 			}
 
 		case "route":
+			if err := loadRoutePageResults(&page); err != nil {
+				log.Printf(
+					"Error loading route results for job %d: %v",
+					jobID,
+					err,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
 			if err := RouteResultsTemplate.Execute(w, page); err != nil {
 				log.Printf(
 					"Error executing route results template: %v",
@@ -162,6 +176,26 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 			)
 		}
 	}
+}
+
+func loadRoutePageResults(page *ResultsPage) error {
+	if page.Job.Status != "completed" ||
+		page.Job.ResultReference == nil {
+		return nil
+	}
+
+	results, err := loadRouteResults(
+		*page.Job.ResultReference,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to load route results: %w",
+			err,
+		)
+	}
+
+	page.RouteResults = results
+	return nil
 }
 
 func loadDatasetPageResults(page *ResultsPage) error {
@@ -194,6 +228,23 @@ func loadDatasetPageResults(page *ResultsPage) error {
 	page.ModelResults = modelResults
 
 	return nil
+}
+
+func loadRouteResults(path string) (*RouteResults, error) {
+	resultFile, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	defer resultFile.Close()
+
+	var results RouteResults
+
+	if err := json.NewDecoder(resultFile).Decode(&results); err != nil {
+		return nil, err
+	}
+
+	return &results, nil
 }
 
 // loadImagePageResults loads image-processing results for a completed job.
@@ -268,6 +319,88 @@ func prepareJob(
 	return jobID, inputPath, nil
 }
 
+func prepareRouteJob(
+	db *sql.DB,
+	routeTempPath string,
+	distanceTempPath string,
+) (int64, string, error) {
+	jobID, err := jobs.CreateJob(db, "route")
+	if err != nil {
+		return 0, "", fmt.Errorf(
+			"failed to create route job: %w",
+			err,
+		)
+	}
+
+	jobDirectory := filepath.Join(
+		"uploads",
+		strconv.FormatInt(jobID, 10),
+	)
+
+	if err := os.MkdirAll(
+		jobDirectory,
+		0755,
+	); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to create route job directory: %w",
+			err,
+		)
+	}
+
+	routePath := filepath.Join(
+		jobDirectory,
+		"route.csv",
+	)
+
+	distancePath := filepath.Join(
+		jobDirectory,
+		"distances.csv",
+	)
+
+	if err := os.Rename(
+		routeTempPath,
+		routePath,
+	); err != nil {
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to move route CSV: %w",
+			err,
+		)
+	}
+
+	if err := os.Rename(
+		distanceTempPath,
+		distancePath,
+	); err != nil {
+		_ = os.Remove(routePath)
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to move distance CSV: %w",
+			err,
+		)
+	}
+
+	if err := saveInputReference(
+		db,
+		routePath,
+		jobID,
+	); err != nil {
+		_ = os.RemoveAll(jobDirectory)
+		_ = jobs.DeleteJob(db, jobID)
+
+		return 0, "", fmt.Errorf(
+			"failed to save route input reference: %w",
+			err,
+		)
+	}
+
+	return jobID, routePath, nil
+}
+
 // finalizeJobSubmission saves the job configuration and enqueues the job.
 func finalizeJobSubmission(
 	db *sql.DB,
@@ -294,6 +427,156 @@ func finalizeJobSubmission(
 	}
 
 	return nil
+}
+
+// RouteSubmissionHandler handles route optimization job submission.
+func RouteSubmissionHandler(
+	db *sql.DB,
+	redisClient *redis.Client,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		uploadID := r.FormValue("uploadID")
+
+		routeTempPath, distanceTempPath, err :=
+			getTemporaryRouteFiles(uploadID)
+
+		if err != nil {
+			switch {
+			case errors.Is(err, errRouteNotUploaded):
+				http.Error(
+					w,
+					"Route files have not been uploaded.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, errInvalidUploadID):
+				http.Error(
+					w,
+					"Invalid upload ID.",
+					http.StatusBadRequest,
+				)
+
+			case errors.Is(err, os.ErrNotExist):
+				http.Error(
+					w,
+					"Temporary route files were not found.",
+					http.StatusBadRequest,
+				)
+
+			default:
+				log.Println(
+					"Error checking temporary route files:",
+					err,
+				)
+
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+			}
+
+			return
+		}
+
+		config, err := getRouteConfig(r)
+		if err != nil {
+			http.Error(
+				w,
+				err.Error(),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		jobID, routePath, err := prepareRouteJob(
+			db,
+			routeTempPath,
+			distanceTempPath,
+		)
+
+		if err != nil {
+			log.Println(
+				"Error preparing route job:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		log.Printf(
+			"Moved route files for job %d to %s",
+			jobID,
+			filepath.Dir(routePath),
+		)
+
+		if _, err := jobs.SaveRouteConfig(
+			config,
+			jobID,
+		); err != nil {
+			_ = os.RemoveAll(
+				filepath.Dir(routePath),
+			)
+			_ = jobs.DeleteJob(db, jobID)
+
+			log.Printf(
+				"Error saving route configuration for job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := jobs.EnqueueJob(
+			redisClient,
+			jobID,
+		); err != nil {
+			_ = os.RemoveAll(
+				filepath.Dir(routePath),
+			)
+			_ = jobs.DeleteJob(db, jobID)
+
+			log.Printf(
+				"Error enqueuing route job %d: %v",
+				jobID,
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		http.Redirect(
+			w,
+			r,
+			"/",
+			http.StatusSeeOther,
+		)
+	}
 }
 
 // DatasetSubmissionHandler handles dataset job submission.
@@ -554,6 +837,56 @@ func ImageSubmissionHandler(
 			http.StatusSeeOther,
 		)
 	}
+}
+
+func getRouteConfig(
+	r *http.Request,
+) (jobs.RouteConfig, error) {
+	config := jobs.RouteConfig{
+		StartLocation: r.FormValue("start_location"),
+		EndLocation:   r.FormValue("end_location"),
+		Optimization: jobs.RouteOptimizationConfig{
+			Algorithm: r.FormValue("algorithm"),
+		},
+		Constraints: jobs.RouteConstraintConfig{},
+	}
+
+	if config.StartLocation == "" {
+		return jobs.RouteConfig{}, fmt.Errorf(
+			"start location is required",
+		)
+	}
+
+	if maxDistance := r.FormValue("max_distance"); maxDistance != "" {
+		value, err := strconv.ParseFloat(
+			maxDistance,
+			64,
+		)
+
+		if err != nil || value <= 0 {
+			return jobs.RouteConfig{}, fmt.Errorf(
+				"maximum distance must be a positive number",
+			)
+		}
+
+		config.Constraints.MaxDistance = &value
+	}
+
+	if maxStops := r.FormValue("max_stops"); maxStops != "" {
+		value, err := strconv.Atoi(
+			maxStops,
+		)
+
+		if err != nil || value <= 0 {
+			return jobs.RouteConfig{}, fmt.Errorf(
+				"maximum stops must be a positive integer",
+			)
+		}
+
+		config.Constraints.MaxStops = &value
+	}
+
+	return config, nil
 }
 
 func getImageConfig(
@@ -1113,6 +1446,274 @@ func ImageUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// RouteUploadHandler handles route file uploads for route optimization jobs.
+func RouteUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(
+			w,
+			"Method not allowed",
+			http.StatusMethodNotAllowed,
+		)
+		return
+	}
+
+	// Limit the total request size.
+	r.Body = http.MaxBytesReader(
+		w,
+		r.Body,
+		MaxUploadSize,
+	)
+
+	// Retrieve the route CSV.
+	routeFile, routeHeader, err := r.FormFile("routeFile")
+	if err != nil {
+		http.Error(
+			w,
+			"A route CSV file is required.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+	defer routeFile.Close()
+
+	// Retrieve the distance-table CSV.
+	distanceFile, distanceHeader, err := r.FormFile("distanceFile")
+	if err != nil {
+		routeFile.Close()
+
+		http.Error(
+			w,
+			"A distance table CSV file is required.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+	defer distanceFile.Close()
+
+	// Reject empty files.
+	if routeHeader.Size == 0 {
+		http.Error(
+			w,
+			"The route CSV is empty.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if distanceHeader.Size == 0 {
+		http.Error(
+			w,
+			"The distance table CSV is empty.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Validate file extensions.
+	if strings.ToLower(filepath.Ext(routeHeader.Filename)) != ".csv" {
+		http.Error(
+			w,
+			"Only CSV route files are accepted.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if strings.ToLower(filepath.Ext(distanceHeader.Filename)) != ".csv" {
+		http.Error(
+			w,
+			"Only CSV distance table files are accepted.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	// Create the temporary upload directory.
+	if err := os.MkdirAll(
+		temporaryUploadDirectory,
+		0755,
+	); err != nil {
+		log.Println(
+			"Error creating temporary upload directory:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	uploadID := uuid.New().String()
+
+	routeTempPath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+"_route.csv",
+	)
+
+	distanceTempPath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+"_distances.csv",
+	)
+
+	// Save the route CSV.
+	routeTempFile, err := os.Create(routeTempPath)
+	if err != nil {
+		log.Println(
+			"Error creating temporary route file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	if _, err := io.Copy(routeTempFile, routeFile); err != nil {
+		routeTempFile.Close()
+		os.Remove(routeTempPath)
+
+		log.Println(
+			"Error saving temporary route file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	if err := routeTempFile.Close(); err != nil {
+		os.Remove(routeTempPath)
+
+		log.Println(
+			"Error closing temporary route file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	// Save the distance table CSV.
+	distanceTempFile, err := os.Create(distanceTempPath)
+	if err != nil {
+		os.Remove(routeTempPath)
+
+		log.Println(
+			"Error creating temporary distance table file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	if _, err := io.Copy(distanceTempFile, distanceFile); err != nil {
+		distanceTempFile.Close()
+		os.Remove(routeTempPath)
+		os.Remove(distanceTempPath)
+
+		log.Println(
+			"Error saving temporary distance table file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	if err := distanceTempFile.Close(); err != nil {
+		os.Remove(routeTempPath)
+		os.Remove(distanceTempPath)
+
+		log.Println(
+			"Error closing temporary distance table file:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"Internal server error",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	// Verify that both files are valid CSV files.
+	if err := jobs.ValidateCSV(routeTempPath); err != nil {
+		os.Remove(routeTempPath)
+		os.Remove(distanceTempPath)
+
+		log.Println(
+			"Invalid route CSV:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"The uploaded route file is not a valid CSV file.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	if err := jobs.ValidateCSV(distanceTempPath); err != nil {
+		os.Remove(routeTempPath)
+		os.Remove(distanceTempPath)
+
+		log.Println(
+			"Invalid distance table CSV:",
+			err,
+		)
+
+		http.Error(
+			w,
+			"The uploaded distance table is not a valid CSV file.",
+			http.StatusBadRequest,
+		)
+		return
+	}
+
+	w.Header().Set(
+		"Content-Type",
+		"application/json",
+	)
+
+	if err := json.NewEncoder(w).Encode(
+		struct {
+			UploadID string `json:"upload_id"`
+		}{
+			UploadID: uploadID,
+		},
+	); err != nil {
+		log.Println(
+			"Error encoding route upload response:",
+			err,
+		)
+	}
+}
+
 // parseJobID parses the job ID from a request.
 func parseJobID(r *http.Request) (int64, error) {
 	jobID := r.URL.Query().Get("id")
@@ -1171,6 +1772,44 @@ func loadModelResults(jobID int64) (*ModelResults, error) {
 	}
 
 	return &modelResults, nil
+}
+
+var errRouteNotUploaded = errors.New(
+	"route files have not been uploaded",
+)
+
+func getTemporaryRouteFiles(uploadID string) (
+	string,
+	string,
+	error,
+) {
+	if uploadID == "" {
+		return "", "", errRouteNotUploaded
+	}
+
+	if _, err := uuid.Parse(uploadID); err != nil {
+		return "", "", errInvalidUploadID
+	}
+
+	routePath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+"_route.csv",
+	)
+
+	distancePath := filepath.Join(
+		temporaryUploadDirectory,
+		uploadID+"_distances.csv",
+	)
+
+	if _, err := os.Stat(routePath); err != nil {
+		return "", "", err
+	}
+
+	if _, err := os.Stat(distancePath); err != nil {
+		return "", "", err
+	}
+
+	return routePath, distancePath, nil
 }
 
 // getTemporaryDataset validates the upload ID and returns the temporary dataset path.
