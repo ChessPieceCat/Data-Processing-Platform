@@ -66,5 +66,7 @@ jobs:
           pytest -v processors/image
           pytest -v processors/route
 
-      - name: Build Go server
-        run: go build ./cmd/server
+      - name: Build Go applications
+        run: |
+          go build ./cmd/server
+          go build ./cmd/worker

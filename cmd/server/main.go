@@ -9,7 +9,6 @@ import (
 	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
-	"github.com/ChessPieceCat/Data-Processing-Platform/internal/worker"
 )
 
 func main() {
@@ -44,21 +43,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Define the job processing function.
-	processJob := func(jobID int64) error {
-
-		return jobs.ProcessJob(
-			db,
-			jobID,
-		)
-	}
-
-	// Recover any pending jobs that were not acknowledged due to worker crashes or failures.
-	worker.RecoverPendingJobs(db, redisClient, processJob)
-
-	// Start the worker in a separate goroutine.
-	go worker.RunWorker(db, redisClient, processJob)
-
 	// Serve the index.html file.
 	tmpl, err := template.ParseFiles("web/index.html")
 	if err != nil {
@@ -67,34 +51,97 @@ func main() {
 
 	// Serve static files.
 	fs := http.FileServer(http.Dir("web"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
+	http.Handle(
+		"/static/",
+		http.StripPrefix("/static/", fs),
+	)
 
 	// Handle the root URL.
-	http.HandleFunc("/", apphttp.IndexHandler(db, tmpl))
+	http.HandleFunc(
+		"/",
+		apphttp.IndexHandler(db, tmpl),
+	)
 
 	// Handle the results page.
-	http.HandleFunc("/results", apphttp.ResultsHandler(db))
-	http.HandleFunc("/results/visualization", apphttp.VisualizationHandler(db))
-	http.HandleFunc("/results/image", apphttp.ImageResultHandler(db))
+	http.HandleFunc(
+		"/results",
+		apphttp.ResultsHandler(db),
+	)
+
+	http.HandleFunc(
+		"/results/visualization",
+		apphttp.VisualizationHandler(db),
+	)
+
+	http.HandleFunc(
+		"/results/image",
+		apphttp.ImageResultHandler(db),
+	)
 
 	// Handle the download of result files.
-	http.HandleFunc("/results/download", apphttp.DownloadResultsHandler(db))
-	http.HandleFunc("/results/download/model", apphttp.DownloadModelHandler(db))
-	http.HandleFunc("/results/download/metadata", apphttp.DownloadImageMetadataHandler(db))
+	http.HandleFunc(
+		"/results/download",
+		apphttp.DownloadResultsHandler(db),
+	)
+
+	http.HandleFunc(
+		"/results/download/model",
+		apphttp.DownloadModelHandler(db),
+	)
+
+	http.HandleFunc(
+		"/results/download/metadata",
+		apphttp.DownloadImageMetadataHandler(db),
+	)
 
 	// Handle dataset inspection.
-	http.HandleFunc("/inspect/dataset", apphttp.DatasetInspectionHandler)
+	http.HandleFunc(
+		"/inspect/dataset",
+		apphttp.DatasetInspectionHandler,
+	)
 
-	// handle uploads
-	http.HandleFunc("/upload/image", apphttp.ImageUploadHandler)
-	http.HandleFunc("/upload/route", apphttp.RouteUploadHandler)
+	// Handle uploads.
+	http.HandleFunc(
+		"/upload/image",
+		apphttp.ImageUploadHandler,
+	)
+
+	http.HandleFunc(
+		"/upload/route",
+		apphttp.RouteUploadHandler,
+	)
 
 	// Handle job submission.
-	http.HandleFunc("/submit/dataset", apphttp.DatasetSubmissionHandler(db, redisClient))
-	http.HandleFunc("/submit/image", apphttp.ImageSubmissionHandler(db, redisClient))
-	http.HandleFunc("/submit/route", apphttp.RouteSubmissionHandler(db, redisClient))
+	http.HandleFunc(
+		"/submit/dataset",
+		apphttp.DatasetSubmissionHandler(
+			db,
+			redisClient,
+		),
+	)
+
+	http.HandleFunc(
+		"/submit/image",
+		apphttp.ImageSubmissionHandler(
+			db,
+			redisClient,
+		),
+	)
+
+	http.HandleFunc(
+		"/submit/route",
+		apphttp.RouteSubmissionHandler(
+			db,
+			redisClient,
+		),
+	)
 
 	// Start the HTTP server.
-	log.Println("Server is running on http://localhost:8082")
-	log.Fatal(http.ListenAndServe(":8082", nil))
+	log.Println(
+		"Server is running on http://localhost:8082",
+	)
+
+	log.Fatal(
+		http.ListenAndServe(":8082", nil),
+	)
 }

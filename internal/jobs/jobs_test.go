@@ -137,26 +137,46 @@ func TestGetJobs(t *testing.T) {
 
 	jobList, err := GetJobs(db)
 	if err != nil {
-		t.Fatalf("GetJobs failed: %v", err)
-	}
-
-	if len(jobList) < 2 {
-		t.Fatalf("expected at least 2 jobs, got %d", len(jobList))
-	}
-
-	if jobList[0].ID != secondID {
 		t.Fatalf(
-			"expected newest job to be %d, got %d",
-			secondID,
-			jobList[0].ID,
+			"GetJobs failed: %v",
+			err,
 		)
 	}
 
-	if jobList[1].ID != firstID {
+	var firstJobIndex = -1
+	var secondJobIndex = -1
+
+	for index, job := range jobList {
+		switch job.ID {
+		case firstID:
+			firstJobIndex = index
+
+		case secondID:
+			secondJobIndex = index
+		}
+	}
+
+	if firstJobIndex == -1 {
 		t.Fatalf(
-			"expected second job to be %d, got %d",
+			"first test job %d was not returned",
 			firstID,
-			jobList[1].ID,
+		)
+	}
+
+	if secondJobIndex == -1 {
+		t.Fatalf(
+			"second test job %d was not returned",
+			secondID,
+		)
+	}
+
+	if secondJobIndex >= firstJobIndex {
+		t.Fatalf(
+			"expected job %d to appear before job %d, got indexes %d and %d",
+			secondID,
+			firstID,
+			secondJobIndex,
+			firstJobIndex,
 		)
 	}
 }
@@ -233,8 +253,8 @@ func TestFailJob(t *testing.T) {
 	jobID := createTestJob(t, db)
 	errorMessage := "test processing failure"
 
-	if err := failJob(db, jobID, errorMessage); err != nil {
-		t.Fatalf("failJob failed: %v", err)
+	if err := FailJob(db, jobID, errorMessage); err != nil {
+		t.Fatalf("FailJob failed: %v", err)
 	}
 
 	job, err := GetJob(db, jobID)

@@ -1,14 +1,48 @@
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:
 
 services:
   app:
     build: .
+    command: ./server
     ports:
       - "8082:8082"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: data_platform
+      DB_PASSWORD: dev_password
+      DB_NAME: data_platform
+      REDIS_ADDR: redis:6379
+      PYTHON_BIN: /opt/venv/bin/python
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: .
+    command: ./worker
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: data_platform
+      DB_PASSWORD: dev_password
+      DB_NAME: data_platform
+      REDIS_ADDR: redis:6379
+      PYTHON_BIN: /opt/venv/bin/python
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   db:
     image: postgres:18
@@ -20,6 +54,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U data_platform -d data_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   pgadmin:
     image: dpage/pgadmin4

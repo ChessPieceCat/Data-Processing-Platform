@@ -4,3 +4,6 @@ notes
 /processors/dataset/pyplan
 /uploads/*
 !/uploads/.gitkeep
+__pycache__/
+*.pyc
+server

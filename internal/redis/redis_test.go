@@ -13,10 +13,10 @@ func TestOpenRedis(t *testing.T) {
 
 	defer client.Close()
 
-	if client.Options().Addr != redisAddr {
+	if client.Options().Addr != "localhost:6379" {
 		t.Fatalf(
 			"expected Redis address %q, got %q",
-			redisAddr,
+			"localhost:6379",
 			client.Options().Addr,
 		)
 	}
