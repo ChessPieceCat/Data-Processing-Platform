@@ -3,6 +3,8 @@ const inspectButton = document.getElementById("inspectDataset");
 const datasetInfo = document.getElementById("datasetInfo");
 const datasetStatus = document.getElementById("datasetStatus");
 const submitJobButton = document.getElementById("submitJob");
+const uploadIDInput = document.getElementById("uploadID");
+
 const modelSelect = document.getElementById("model");
 const modelOptions = document.getElementById("modelOptions");
 const modelVisualizationOptions = document.getElementById(
@@ -36,36 +38,50 @@ const routeUploadID = document.getElementById("routeUploadID");
 const routeOptions = document.getElementById("routeOptions");
 const startLocationSelect = document.getElementById("startLocation");
 const endLocationSelect = document.getElementById("endLocation");
-const submitRouteJobButton = document.getElementById(
-    "submitRouteJob"
-);
+const submitRouteJobButton = document.getElementById("submitRouteJob");
 
+let datasetColumns = [];
 
 // ------------------------------
-// Image processing
+// Dataset inspection
 // ------------------------------
 
-// Upload the selected image and show processing options.
-if (imageFileInput && imageOptions) {
-    imageFileInput.addEventListener("change", async () => {
-        const file = imageFileInput.files[0];
+// Upload the selected CSV and inspect its columns.
+if (inspectButton && csvFileInput) {
+    inspectButton.addEventListener("click", async () => {
+        const file = csvFileInput.files[0];
 
         if (!file) {
-            imageOptions.hidden = true;
-            imageUploadID.value = "";
+            alert("Please select a CSV file first.");
             return;
         }
 
-        imageOptions.hidden = true;
+        if (
+            file.type &&
+            file.type !== "text/csv" &&
+            !file.name.toLowerCase().endsWith(".csv")
+        ) {
+            alert("Only CSV files are accepted.");
+            return;
+        }
+
+        inspectButton.disabled = true;
+
+        if (datasetStatus) {
+            datasetStatus.textContent = "Inspecting dataset...";
+        }
 
         try {
             const formData = new FormData();
-            formData.append("imageFile", file);
+            formData.append("csvFile", file);
 
-            const response = await fetch("/upload/image", {
-                method: "POST",
-                body: formData
-            });
+            const response = await fetch(
+                "/inspect/dataset",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
 
             if (!response.ok) {
                 const message = await response.text();
@@ -74,34 +90,358 @@ if (imageFileInput && imageOptions) {
 
             const data = await response.json();
 
-            imageUploadID.value = data.upload_id;
-            imageOptions.hidden = false;
-        } catch (error) {
-            imageOptions.hidden = true;
-            imageFileInput.value = "";
-            imageUploadID.value = "";
+            if (!Array.isArray(data.columns)) {
+                throw new Error(
+                    "The server returned an invalid column list."
+                );
+            }
 
-            alert(`Error uploading image: ${error.message}`);
+            if (!data.upload_id) {
+                throw new Error(
+                    "The server did not return an upload ID."
+                );
+            }
+
+            datasetColumns = data.columns;
+
+            // Preserve the dataset configuration form.
+            if (datasetInfo) {
+                datasetInfo.hidden = false;
+            }
+
+            if (uploadIDInput) {
+                uploadIDInput.value = data.upload_id;
+            }
+
+            if (datasetStatus) {
+                datasetStatus.textContent =
+                    `Dataset inspection complete. Found ` +
+                    `${data.columns.length} columns: ` +
+                    data.columns.join(", ");
+            }
+
+            populateTargetOptions();
+            updateFeatureOptions();
+            updateModelOptions();
+            updateDatasetSubmitButton();
+        } catch (error) {
+            datasetColumns = [];
+
+            if (uploadIDInput) {
+                uploadIDInput.value = "";
+            }
+
+            if (datasetInfo) {
+                datasetInfo.hidden = true;
+            }
+
+            if (datasetStatus) {
+                datasetStatus.textContent =
+                    "Dataset inspection failed.";
+            }
+
+            alert(
+                `Error inspecting dataset: ${error.message}`
+            );
+        } finally {
+            inspectButton.disabled = false;
         }
     });
 }
 
+// Populate the target selector from inspected columns.
+function populateTargetOptions() {
+    if (!targetSelect) {
+        return;
+    }
+
+    targetSelect.replaceChildren();
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select a target";
+
+    targetSelect.appendChild(placeholder);
+
+    for (const column of datasetColumns) {
+        const option = document.createElement("option");
+        option.value = column;
+        option.textContent = column;
+
+        targetSelect.appendChild(option);
+    }
+}
+
+// Show or hide model-specific configuration.
+function updateModelOptions() {
+    if (modelOptions) {
+        modelOptions.hidden =
+            !modelSelect ||
+            modelSelect.value === "none";
+    }
+
+    if (modelVisualizationOptions) {
+        modelVisualizationOptions.hidden =
+            !modelSelect ||
+            modelSelect.value === "none";
+    }
+
+    if (manualConfig) {
+        manualConfig.hidden =
+            !configTypeSelect ||
+            configTypeSelect.value !== "manual";
+    }
+
+    updateFeatureOptions();
+    updateDatasetSubmitButton();
+}
+
+// Show or hide manual feature selection.
+function updateFeatureOptions() {
+    if (!manualFeatures) {
+        return;
+    }
+
+    const selectedFeatureMode = document.querySelector(
+        'input[name="featureSelection"]:checked'
+    );
+
+    const manualSelected =
+        selectedFeatureMode &&
+        selectedFeatureMode.value === "manual";
+
+    manualFeatures.hidden =
+        !manualSelected ||
+        !modelSelect ||
+        modelSelect.value === "none";
+
+    if (!manualSelected || !featureList) {
+        return;
+    }
+
+    const selectedTarget = targetSelect
+        ? targetSelect.value
+        : "";
+
+    const previousSelections = new Set(
+        Array.from(
+            featureList.querySelectorAll(
+                'input[type="checkbox"]'
+            )
+        )
+            .filter((input) => input.checked)
+            .map((input) => input.value)
+    );
+
+    featureList.replaceChildren();
+
+    for (const column of datasetColumns) {
+        if (column === selectedTarget) {
+            continue;
+        }
+
+        const label = document.createElement("label");
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = "features";
+        checkbox.value = column;
+        checkbox.checked =
+            previousSelections.has(column);
+
+        label.appendChild(checkbox);
+        label.appendChild(
+            document.createTextNode(` ${column}`)
+        );
+
+        featureList.appendChild(label);
+        featureList.appendChild(
+            document.createElement("br")
+        );
+    }
+}
+
+// Enable dataset submission when the configuration is valid
+// enough for the frontend to submit it.
+function updateDatasetSubmitButton() {
+    if (!submitJobButton) {
+        return;
+    }
+
+    const hasUpload =
+        uploadIDInput &&
+        uploadIDInput.value !== "";
+
+    const hasModel =
+        modelSelect &&
+        modelSelect.value !== "";
+
+    const hasTarget =
+        targetSelect &&
+        targetSelect.value !== "";
+
+    const modelRequiresTarget =
+        modelSelect &&
+        modelSelect.value !== "none";
+
+    const manualFeatureMode =
+        document.querySelector(
+            'input[name="featureSelection"]:checked'
+        );
+
+    const manualFeaturesSelected =
+        manualFeatureMode &&
+        manualFeatureMode.value === "manual" &&
+        featureList
+            ? featureList.querySelectorAll(
+                'input[type="checkbox"]:checked'
+            ).length > 0
+            : true;
+
+    const ready =
+        hasUpload &&
+        hasModel &&
+        (!modelRequiresTarget || hasTarget) &&
+        manualFeaturesSelected;
+
+    submitJobButton.disabled = !ready;
+}
+
+if (modelSelect) {
+    modelSelect.addEventListener(
+        "change",
+        updateModelOptions
+    );
+}
+
+if (configTypeSelect) {
+    configTypeSelect.addEventListener(
+        "change",
+        () => {
+            if (manualConfig) {
+                manualConfig.hidden =
+                    configTypeSelect.value !== "manual";
+            }
+
+            updateDatasetSubmitButton();
+        }
+    );
+}
+
+if (targetSelect) {
+    targetSelect.addEventListener(
+        "change",
+        () => {
+            updateFeatureOptions();
+            updateDatasetSubmitButton();
+        }
+    );
+}
+
+for (const input of featureSelectionInputs) {
+    input.addEventListener(
+        "change",
+        () => {
+            updateFeatureOptions();
+            updateDatasetSubmitButton();
+        }
+    );
+}
+
+if (featureList) {
+    featureList.addEventListener(
+        "change",
+        updateDatasetSubmitButton
+    );
+}
+
+// ------------------------------
+// Image processing
+// ------------------------------
+
+// Upload the selected image and show processing options.
+if (imageFileInput && imageOptions) {
+    imageFileInput.addEventListener(
+        "change",
+        async () => {
+            const file = imageFileInput.files[0];
+
+            if (!file) {
+                imageOptions.hidden = true;
+
+                if (imageUploadID) {
+                    imageUploadID.value = "";
+                }
+
+                return;
+            }
+
+            imageOptions.hidden = true;
+
+            try {
+                const formData = new FormData();
+                formData.append("imageFile", file);
+
+                const response = await fetch(
+                    "/upload/image",
+                    {
+                        method: "POST",
+                        body: formData
+                    }
+                );
+
+                if (!response.ok) {
+                    const message =
+                        await response.text();
+
+                    throw new Error(message);
+                }
+
+                const data = await response.json();
+
+                if (imageUploadID) {
+                    imageUploadID.value =
+                        data.upload_id;
+                }
+
+                imageOptions.hidden = false;
+            } catch (error) {
+                imageOptions.hidden = true;
+                imageFileInput.value = "";
+
+                if (imageUploadID) {
+                    imageUploadID.value = "";
+                }
+
+                alert(
+                    `Error uploading image: ${error.message}`
+                );
+            }
+        }
+    );
+}
 
 // Show or hide resize options.
 if (resizeImageCheckbox && resizeOptions) {
-    resizeImageCheckbox.addEventListener("change", () => {
-        resizeOptions.hidden = !resizeImageCheckbox.checked;
-    });
+    resizeImageCheckbox.addEventListener(
+        "change",
+        () => {
+            resizeOptions.hidden =
+                !resizeImageCheckbox.checked;
+        }
+    );
 }
-
 
 // Show or hide compression options.
-if (compressImageCheckbox && compressionOptions) {
-    compressImageCheckbox.addEventListener("change", () => {
-        updateImageCompressionOptions();
-    });
+if (
+    compressImageCheckbox &&
+    compressionOptions
+) {
+    compressImageCheckbox.addEventListener(
+        "change",
+        updateImageCompressionOptions
+    );
 }
-
 
 // Update compression options when output format changes.
 if (outputFormat) {
@@ -111,20 +451,29 @@ if (outputFormat) {
     );
 }
 
-
 // Show or hide format-conversion options.
-if (convertFormatCheckbox && formatOptions) {
-    convertFormatCheckbox.addEventListener("change", () => {
-        formatOptions.hidden = !convertFormatCheckbox.checked;
-        updateImageCompressionOptions();
-    });
+if (
+    convertFormatCheckbox &&
+    formatOptions
+) {
+    convertFormatCheckbox.addEventListener(
+        "change",
+        () => {
+            formatOptions.hidden =
+                !convertFormatCheckbox.checked;
+
+            updateImageCompressionOptions();
+        }
+    );
 }
 
-
-// Update the visibility of compression options based on the
-// selected output format and original image format.
+// Update the visibility of compression options based on
+// the selected output format and original image format.
 function updateImageCompressionOptions() {
-    if (!compressionOptions || !compressImageCheckbox) {
+    if (
+        !compressionOptions ||
+        !compressImageCheckbox
+    ) {
         return;
     }
 
@@ -133,10 +482,12 @@ function updateImageCompressionOptions() {
         return;
     }
 
-    const file = imageFileInput?.files[0];
+    const file =
+        imageFileInput?.files[0];
 
     const originalIsPng =
-        file && file.type === "image/png";
+        file &&
+        file.type === "image/png";
 
     const convertingToPng =
         convertFormatCheckbox &&
@@ -146,6 +497,7 @@ function updateImageCompressionOptions() {
 
     if (
         originalIsPng &&
+        convertFormatCheckbox &&
         !convertFormatCheckbox.checked
     ) {
         compressionOptions.hidden = true;
@@ -160,7 +512,6 @@ function updateImageCompressionOptions() {
     compressionOptions.hidden = false;
 }
 
-
 // ------------------------------
 // Route processing
 // ------------------------------
@@ -172,10 +523,16 @@ if (
     routeOptions
 ) {
     const updateRouteUpload = async () => {
-        const routeFile = routeFileInput.files[0];
-        const distanceFile = distanceFileInput.files[0];
+        const routeFile =
+            routeFileInput.files[0];
 
-        routeUploadID.value = "";
+        const distanceFile =
+            distanceFileInput.files[0];
+
+        if (routeUploadID) {
+            routeUploadID.value = "";
+        }
+
         routeOptions.hidden = true;
 
         if (
@@ -189,9 +546,14 @@ if (
         if (
             routeFile.type &&
             routeFile.type !== "text/csv" &&
-            !routeFile.name.toLowerCase().endsWith(".csv")
+            !routeFile.name
+                .toLowerCase()
+                .endsWith(".csv")
         ) {
-            alert("The route file must be a CSV file.");
+            alert(
+                "The route file must be a CSV file."
+            );
+
             routeFileInput.value = "";
             updateRouteSubmitButton();
             return;
@@ -200,11 +562,14 @@ if (
         if (
             distanceFile.type &&
             distanceFile.type !== "text/csv" &&
-            !distanceFile.name.toLowerCase().endsWith(".csv")
+            !distanceFile.name
+                .toLowerCase()
+                .endsWith(".csv")
         ) {
             alert(
                 "The distance table file must be a CSV file."
             );
+
             distanceFileInput.value = "";
             updateRouteSubmitButton();
             return;
@@ -213,29 +578,50 @@ if (
         try {
             const formData = new FormData();
 
-            formData.append("routeFile", routeFile);
-            formData.append("distanceFile", distanceFile);
+            formData.append(
+                "routeFile",
+                routeFile
+            );
 
-            const response = await fetch("/upload/route", {
-                method: "POST",
-                body: formData
-            });
+            formData.append(
+                "distanceFile",
+                distanceFile
+            );
+
+            const response = await fetch(
+                "/upload/route",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
 
             if (!response.ok) {
-                const message = await response.text();
+                const message =
+                    await response.text();
+
                 throw new Error(message);
             }
 
             const data = await response.json();
 
-            routeUploadID.value = data.upload_id;
+            if (routeUploadID) {
+                routeUploadID.value =
+                    data.upload_id;
+            }
 
-            await populateRouteLocations(routeFile);
+            await populateRouteLocations(
+                routeFile
+            );
 
             routeOptions.hidden = false;
+
             updateRouteSubmitButton();
         } catch (error) {
-            routeUploadID.value = "";
+            if (routeUploadID) {
+                routeUploadID.value = "";
+            }
+
             routeOptions.hidden = true;
 
             alert(
@@ -258,7 +644,6 @@ if (
     );
 }
 
-
 // Read the route CSV and populate the start/end selectors.
 async function populateRouteLocations(file) {
     if (
@@ -269,7 +654,6 @@ async function populateRouteLocations(file) {
     }
 
     const text = await file.text();
-
     const rows = parseCSV(text);
 
     if (rows.length < 2) {
@@ -281,7 +665,8 @@ async function populateRouteLocations(file) {
     const header = rows[0];
 
     const nameIndex = header.findIndex(
-        (column) => column.trim() === "name"
+        (column) =>
+            column.trim() === "name"
     );
 
     if (nameIndex === -1) {
@@ -292,16 +677,24 @@ async function populateRouteLocations(file) {
 
     const locationNames = [];
 
-    for (let index = 1; index < rows.length; index++) {
+    for (
+        let index = 1;
+        index < rows.length;
+        index++
+    ) {
         const row = rows[index];
 
         if (!row.length) {
             continue;
         }
 
-        const name = row[nameIndex]?.trim();
+        const name =
+            row[nameIndex]?.trim();
 
-        if (name && !locationNames.includes(name)) {
+        if (
+            name &&
+            !locationNames.includes(name)
+        ) {
             locationNames.push(name);
         }
     }
@@ -361,15 +754,19 @@ async function populateRouteLocations(file) {
     }
 }
 
-
 // Basic CSV parser that handles quoted fields.
 function parseCSV(text) {
     const rows = [];
+
     let row = [];
     let field = "";
     let insideQuotes = false;
 
-    for (let index = 0; index < text.length; index++) {
+    for (
+        let index = 0;
+        index < text.length;
+        index++
+    ) {
         const character = text[index];
 
         if (character === '"') {
@@ -380,21 +777,27 @@ function parseCSV(text) {
                 field += '"';
                 index++;
             } else {
-                insideQuotes = !insideQuotes;
+                insideQuotes =
+                    !insideQuotes;
             }
 
             continue;
         }
 
-        if (character === "," && !insideQuotes) {
+        if (
+            character === "," &&
+            !insideQuotes
+        ) {
             row.push(field);
             field = "";
             continue;
         }
 
         if (
-            (character === "\n" ||
-                character === "\r") &&
+            (
+                character === "\n" ||
+                character === "\r"
+            ) &&
             !insideQuotes
         ) {
             if (
@@ -407,9 +810,12 @@ function parseCSV(text) {
             row.push(field);
             field = "";
 
-            if (row.some(
-                (value) => value.trim() !== ""
-            )) {
+            if (
+                row.some(
+                    (value) =>
+                        value.trim() !== ""
+                )
+            ) {
                 rows.push(row);
             }
 
@@ -420,19 +826,24 @@ function parseCSV(text) {
         field += character;
     }
 
-    if (field !== "" || row.length > 0) {
+    if (
+        field !== "" ||
+        row.length > 0
+    ) {
         row.push(field);
 
-        if (row.some(
-            (value) => value.trim() !== ""
-        )) {
+        if (
+            row.some(
+                (value) =>
+                    value.trim() !== ""
+            )
+        ) {
             rows.push(row);
         }
     }
 
     return rows;
 }
-
 
 // Update route submission button state.
 function updateRouteSubmitButton() {
@@ -446,9 +857,9 @@ function updateRouteSubmitButton() {
         startLocationSelect &&
         startLocationSelect.value !== "";
 
-    submitRouteJobButton.disabled = !ready;
+    submitRouteJobButton.disabled =
+        !ready;
 }
-
 
 // Enable or disable the route submit button when
 // the starting location changes.
@@ -459,13 +870,17 @@ if (startLocationSelect) {
     );
 }
 
-
 // ------------------------------
 // Initial state
 // ------------------------------
 
 updateModelOptions();
 updateFeatureOptions();
+updateDatasetSubmitButton();
+
+if (datasetInfo) {
+    datasetInfo.hidden = true;
+}
 
 if (imageOptions) {
     imageOptions.hidden =

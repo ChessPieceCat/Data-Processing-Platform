@@ -3,19 +3,26 @@ package redis
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/redis/go-redis/v9"
 )
 
-const redisAddr = "localhost:6379"
+// const redisAddr = "localhost:6379"
 
 // OpenRedis opens the applicaiton Redis connection and returns the client instance.
 func OpenRedis() *redis.Client {
-	client := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
+	address := os.Getenv("REDIS_ADDR")
 
-	return client
+	if address == "" {
+		address = "localhost:6379"
+	}
+
+	return redis.NewClient(
+		&redis.Options{
+			Addr: address,
+		},
+	)
 }
 
 // PingRedis pings the Redis server to check if it's reachable.

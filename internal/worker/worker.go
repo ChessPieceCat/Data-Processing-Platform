@@ -11,6 +11,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const maxJobAttempts = 3
+
 // Connect to job_queue and wait for new jobs.
 func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error) {
 	for {
@@ -47,6 +49,11 @@ func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int6
 
 				ack := true
 				if err := processJob(jobID); err != nil {
+					log.Printf(
+						"Error processing job %d: %v",
+						jobID,
+						err,
+					)
 					// Check if the job reached a terminal failed state in PostgreSQL.
 					job, err := jobs.GetJob(db, jobID)
 					if err != nil {
@@ -162,6 +169,34 @@ func RecoverPendingJobs(
 			).Err(); err != nil {
 				log.Printf(
 					"Error acknowledging terminal job %d: %v",
+					jobID,
+					err,
+				)
+			}
+
+			continue
+		}
+
+		// Do not reprocess jobs that have reached the maximum number of attempts.
+		if job.Attempts >= maxJobAttempts {
+			errorMessage := fmt.Sprintf("Job %d reached maximum attempts (%d)", jobID, maxJobAttempts)
+			if err := jobs.FailJob(db, jobID, errorMessage); err != nil {
+				log.Printf(
+					"Error marking job %d as failed: %v",
+					jobID,
+					err,
+				)
+				continue
+			}
+
+			if err := redisClient.XAck(
+				context.Background(),
+				"job_queue",
+				"job_workers",
+				pending.ID,
+			).Err(); err != nil {
+				log.Printf(
+					"Error acknowledging job %d after marking as failed: %v",
 					jobID,
 					err,
 				)

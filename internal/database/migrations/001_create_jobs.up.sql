@@ -7,5 +7,6 @@ CREATE TABLE jobs (
     created_at TIMESTAMP NOT NULL,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
-    error_message TEXT
+    error_message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
 );

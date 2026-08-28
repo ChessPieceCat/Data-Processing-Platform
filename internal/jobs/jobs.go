@@ -67,7 +67,7 @@ func ProcessJob(
 	)
 
 	if err != nil {
-		if failErr := failJob(db, jobID, err.Error()); failErr != nil {
+		if failErr := FailJob(db, jobID, err.Error()); failErr != nil {
 			log.Printf("Error marking job %d as failed: %v", jobID, failErr)
 		}
 
@@ -76,7 +76,7 @@ func ProcessJob(
 
 	// Save the result reference.
 	if err := saveResultReference(db, jobID, resultPath); err != nil {
-		if failErr := failJob(db, jobID, err.Error()); failErr != nil {
+		if failErr := FailJob(db, jobID, err.Error()); failErr != nil {
 			log.Printf("Error marking job %d as failed: %v", jobID, failErr)
 		}
 
@@ -175,12 +175,34 @@ func runProcessor(
 		configPath,
 	)
 
-	cmd := exec.Command(
-		"python3",
+	pythonPath := os.Getenv("PYTHON_BIN")
+	if pythonPath == "" {
+		pythonPath = "python3"
+	}
+
+	const processorTimeout = 60 * time.Second
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		processorTimeout,
+	)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		ctx,
+		pythonPath,
 		args...,
 	)
 
 	output, err := cmd.CombinedOutput()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf(
+			"%s processor timed out after 60 seconds",
+			processorType,
+		)
+	}
+
 	if err != nil {
 		return "", fmt.Errorf(
 			"%s processor failed: %w: %s",
@@ -206,12 +228,13 @@ func saveResultReference(db *sql.DB, jobID int64, resultPath string) error {
 	return err
 }
 
-// startJob marks a job as processing.
+// startJob marks a job as processing and increments its attempt count.
 func startJob(db *sql.DB, jobID int64) error {
 	_, err := db.Exec(
 		`UPDATE jobs
 		 SET status = $1,
-		     started_at = $2
+		     started_at = $2,
+			 attempts = attempts + 1
 		 WHERE id = $3`,
 		"processing",
 		time.Now(),
@@ -223,6 +246,7 @@ func startJob(db *sql.DB, jobID int64) error {
 	}
 
 	log.Printf("Job %d started", jobID)
+
 	return nil
 }
 
@@ -246,8 +270,8 @@ func completeJob(db *sql.DB, jobID int64) error {
 	return nil
 }
 
-// failJob marks a job as failed and records the error.
-func failJob(db *sql.DB, jobID int64, errorMessage string) error {
+// FailJob marks a job as failed and records the error.
+func FailJob(db *sql.DB, jobID int64, errorMessage string) error {
 	_, err := db.Exec(
 		`UPDATE jobs
 		 SET status = $1,
@@ -270,6 +294,7 @@ type Job struct {
 	ID              int64
 	Type            string
 	Status          string
+	Attempts        int
 	CreatedAt       time.Time
 	StartedAt       *time.Time
 	CompletedAt     *time.Time
@@ -280,7 +305,7 @@ type Job struct {
 
 func GetJobs(db *sql.DB) ([]Job, error) {
 	rows, err := db.Query(
-		`SELECT id, type, status, created_at, started_at, completed_at, error_message
+		`SELECT id, type, status, attempts, created_at, started_at, completed_at, error_message
 		 FROM jobs
 		 ORDER BY created_at DESC`,
 	)
@@ -300,6 +325,7 @@ func GetJobs(db *sql.DB) ([]Job, error) {
 			&j.ID,
 			&j.Type,
 			&j.Status,
+			&j.Attempts,
 			&j.CreatedAt,
 			&j.StartedAt,
 			&j.CompletedAt,
@@ -323,7 +349,7 @@ func GetJob(db *sql.DB, jobID int64) (*Job, error) {
 	var j Job
 
 	err := db.QueryRow(
-		`SELECT id, type, status, created_at, started_at, completed_at,
+		`SELECT id, type, status, attempts, created_at, started_at, completed_at,
 	        error_message, result_reference, input_reference
 		 FROM jobs
 		 WHERE id = $1`,
@@ -332,6 +358,7 @@ func GetJob(db *sql.DB, jobID int64) (*Job, error) {
 		&j.ID,
 		&j.Type,
 		&j.Status,
+		&j.Attempts,
 		&j.CreatedAt,
 		&j.StartedAt,
 		&j.CompletedAt,
