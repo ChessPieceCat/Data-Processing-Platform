@@ -17,12 +17,18 @@ The current implementation supports:
 - Temporary upload handling and per-job storage
 - PostgreSQL-backed job records
 - Redis Streams for asynchronous job processing
+- Separate Go HTTP server and Go worker processes
 - Generic job processing and dispatch based on job type
+- Shared job input/result storage between the application and worker
 - Job lifecycle tracking:
   - queued
   - processing
   - completed
   - failed
+- Worker recovery of pending jobs after worker crashes or restarts
+- Retry limits for interrupted jobs
+- Processor timeout handling
+- Configurable database and Redis connection settings
 
 ### Dataset Processing
 
@@ -93,17 +99,28 @@ Image processing currently uses Python and Pillow.
 
 The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Location demand, priority, and time-window values are stored and validated, but they do not automatically alter the routing algorithm unless an explicit supported rule or constraint is introduced.
 
+### Reliability
+
+- Predictable completed and failed job states
+- Detailed job error information
+- Pending-job recovery after worker interruption or restart
+- Bounded retries for interrupted jobs
+- Processor execution timeouts
+- Safe handling of duplicate job delivery where practical
+- Cleanup of temporary and per-job files
+- Database and Redis health checks in the containerized development environment
+
 ### Platform
 
 - Automatic cleanup of older jobs while retaining the most recent jobs
 - Automated Go and Python tests
-- GitHub Actions CI for Go tests, dataset processor tests, image processor tests, route processor tests, and Go builds
+- GitHub Actions CI for Go tests, all Python processor tests, and both Go binaries
 
 ---
 
 ## Architecture
 
-The application uses Go for the web server, job management, job dispatching, Redis queueing, and worker execution; PostgreSQL for persistent job state; and Python for domain-specific processing.
+The application uses Go for the web server, job management, job submission, Redis queueing, and worker execution; PostgreSQL for persistent job state; Redis Streams for asynchronous delivery; and Python for domain-specific processing.
 
 ```text
 Browser
@@ -116,10 +133,10 @@ Go HTTP server
    +---- Redis Stream
              |
              v
-         Go Worker
+        Go Worker
              |
              v
-          ProcessJob
+         ProcessJob
              |
        +-----+-----+-----+
        |           |     |
@@ -129,9 +146,9 @@ Go HTTP server
        |           |       |
        v           v       v
      Python      Python  Python
-     dataset     image   route
-     processor   processor processor
-       |           |       |
+     dataset      image   route
+    processor   processor processor
+       |           |
        |           +--- Pillow
        |
        +--- pandas
@@ -139,17 +156,25 @@ Go HTTP server
        +--- matplotlib / seaborn
 ```
 
-The Go application creates a job in PostgreSQL and enqueues its job ID in a Redis Stream. A worker consumes messages from the stream and passes the job to `ProcessJob`.
+The application and worker are separate processes:
 
-`ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, and dispatches the job to the appropriate processor based on its type. The processor is discovered from the job type and executed with the job's input, output, and configuration paths.
+- The **Go HTTP server** handles requests, uploads, job creation, results, and queue submission.
+- The **Go worker** consumes Redis Stream messages, recovers pending jobs on startup, and invokes `ProcessJob`.
+- **PostgreSQL** stores persistent job state and metadata.
+- **Redis** transports job IDs asynchronously between the application and worker.
+- A shared `uploads/` volume makes job inputs, configuration, and generated artifacts available to both application and worker containers.
+
+The Go application creates a job in PostgreSQL and enqueues its job ID in a Redis Stream. The worker consumes the message and passes the job to `ProcessJob`.
+
+`ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, applies processor timeouts, and dispatches the job to the appropriate processor based on its type. The processor is discovered from the job type and executed with the job's input, output, and configuration paths.
 
 Job-specific processors are responsible for performing domain-specific work and producing result artifacts. The shared job system does not need to be rewritten when another processor is added; a processor can be added for a new job type while preserving the common Redis and worker infrastructure.
 
-Redis Streams use at-least-once delivery semantics. The worker acknowledges messages after processing has completed successfully or after a permanent processing failure has been recorded. Pending messages can be recovered when a worker is restarted.
+Redis Streams use at-least-once delivery semantics. The worker acknowledges messages after processing has completed successfully or after a permanent processing failure has been recorded. Pending messages can be recovered when a worker is restarted. Interrupted jobs are tracked with an attempt count and are prevented from retrying indefinitely.
 
 PostgreSQL remains responsible for persistent job state and metadata, while Redis is responsible for transporting work between the API and worker.
 
-Generated JSON, processed files, route inputs, and visualization artifacts are stored under each job's directory in `uploads/`.
+Generated JSON, processed files, route inputs, and visualization artifacts are stored under each job's directory in `uploads/`. In the containerized development setup, this directory is backed by a shared Compose volume mounted by both the application and worker.
 
 ---
 
@@ -157,32 +182,28 @@ Generated JSON, processed files, route inputs, and visualization artifacts are s
 
 ```text
 cmd/server/
+    Go HTTP server entry point
 
-    Go application entry point
+cmd/worker/
+    Go worker entry point
 
 internal/database/
-
     PostgreSQL connection and embedded migrations
 
 internal/http/
-
     HTTP handlers, result models, and templates
 
 internal/jobs/
-
     Job lifecycle, job dispatching, processor execution,
-    and processing configuration
+    processing configuration, retries, and timeouts
 
 internal/redis/
-
     Redis connection and Stream configuration
 
 internal/worker/
-
-    Redis worker and pending-job recovery
+    Redis worker, pending-job recovery, and retry limits
 
 processors/dataset/
-
     Python dataset processor and tests
 
     analysis.py
@@ -210,7 +231,6 @@ processors/dataset/
         Python tests
 
 processors/image/
-
     Python image processor and tests
 
     config.py
@@ -232,7 +252,6 @@ processors/image/
         Python tests
 
 processors/route/
-
     Python route optimization processor and tests
 
     config.py
@@ -257,11 +276,9 @@ processors/route/
         Python tests
 
 web/
-
     HTML and browser-side JavaScript
 
 docs/
-
     Development and architecture documentation
 ```
 
@@ -269,7 +286,7 @@ docs/
 
 ## Requirements
 
-For the current local development setup, you need:
+For local development outside Docker, you need:
 
 - Go 1.26.5
 - Python 3.12
@@ -281,11 +298,13 @@ For the current local development setup, you need:
 
 The route processor uses only Python standard-library modules and therefore does **not** require a `processors/route/requirements.txt` file.
 
-The repository contains a Docker Compose configuration for local development, including PostgreSQL, Redis, and pgAdmin.
+For containerized development, the repository includes a Docker Compose configuration with PostgreSQL, Redis, pgAdmin, the application server, and the worker. The application image installs Python and the dataset/image dependencies into `/opt/venv`.
 
 ---
 
 ## Running Locally
+
+### Host-based development
 
 Install the dataset processor dependencies:
 
@@ -305,12 +324,18 @@ cd ../..
 
 The route processor has no third-party runtime dependencies.
 
-Start the required services using the repository's Compose configuration.
+Start PostgreSQL and Redis using your local development environment.
 
 Then start the Go server:
 
 ```bash
 go run ./cmd/server
+```
+
+If you also want asynchronous job processing outside Docker, start the worker separately:
+
+```bash
+go run ./cmd/worker
 ```
 
 The server listens on:
@@ -328,6 +353,38 @@ For image jobs, the interface allows image-specific operations such as resizing,
 For route jobs, the interface accepts a route CSV and distance-table CSV and allows the starting location, optional ending location, optimization algorithm, maximum distance, and maximum stops to be configured.
 
 When a job is submitted, the API creates the job record and places a message containing the job ID on the Redis Stream. The worker consumes the message and passes the job to `ProcessJob` for asynchronous processing.
+
+### Docker Compose development
+
+Build and start the full stack:
+
+```bash
+docker compose up -d --build
+```
+
+The Compose environment includes:
+
+- `app` — Go HTTP server
+- `worker` — Go background worker
+- `db` — PostgreSQL
+- `redis` — Redis
+- `pgadmin` — pgAdmin
+
+The application and worker use the Compose service names for PostgreSQL and Redis. The application and worker share the `uploads_data` volume so both can access the same job directories.
+
+The application is available at:
+
+```text
+http://localhost:8082
+```
+
+pgAdmin is available at:
+
+```text
+http://localhost:8083
+```
+
+The Docker image installs Python processor dependencies in `/opt/venv`. The `PYTHON_BIN` environment variable is used to select the processor interpreter inside the container.
 
 ---
 
@@ -375,7 +432,9 @@ The route test suite covers:
 - route feasibility checking
 - processor orchestration
 
-The GitHub Actions workflow runs the Go tests, all three Python test suites, and builds the Go server.
+The Go test suite covers application handlers, job processing, configuration, Redis behavior, worker behavior, database integration, and route integration.
+
+The GitHub Actions workflow runs the Go tests, all three Python test suites, and builds both `cmd/server` and `cmd/worker`.
 
 ---
 
@@ -458,6 +517,7 @@ The route results page displays:
 - improvement percentage
 - feasibility
 - optimization algorithm
+- 2-opt status
 - runtime
 
 Route jobs use `results.json` as their primary processing artifact. Additional binary artifacts or route visualizations can be added in later iterations.
@@ -510,11 +570,39 @@ The route processor first constructs a nearest-neighbor route and then applies 2
 
 ---
 
+## Reliability and Failure Handling
+
+The job system distinguishes between successful and failed processing states and records useful error information in PostgreSQL.
+
+Redis pending messages are recovered when the worker starts. Jobs left in a non-terminal state can be retried, while completed and permanently failed jobs are acknowledged without reprocessing.
+
+Job attempts are tracked in PostgreSQL. Interrupted jobs are retried only up to the configured maximum attempt count. The current maximum is three processing attempts.
+
+Processor execution is bounded by a 60-second timeout. A processor that exceeds the timeout is terminated and the job is recorded as failed.
+
+The system has been tested against:
+
+- malformed input
+- oversized uploads
+- missing input files
+- invalid parameters and configuration
+- worker crashes during processing
+- database failure
+- Redis/queue failure
+- duplicate job delivery
+- partial processing
+- processor timeouts
+- application/worker restart during processing
+
+Redis uses at-least-once delivery semantics, so duplicate delivery is possible. Processing is designed to tolerate duplicate execution where practical without creating duplicate PostgreSQL job records.
+
+---
+
 ## Current Scope
 
 This repository represents the first implementation of the platform.
 
-The current architecture separates generic job orchestration from domain-specific processing. Redis and the worker handle asynchronous job delivery, `ProcessJob` handles the common job lifecycle and processor dispatching, and individual processors handle job-specific execution.
+The current architecture separates generic job orchestration from domain-specific processing. The Go HTTP server handles API requests and submission, Redis and the dedicated worker handle asynchronous delivery, `ProcessJob` handles the common job lifecycle and processor dispatching, and individual processors handle job-specific execution.
 
 Dataset, image, and route processing currently share the same job system and worker infrastructure. Adding another processor does not require rewriting the core queue or worker architecture.
 
