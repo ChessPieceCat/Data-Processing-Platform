@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -40,6 +41,11 @@ func main() {
 		)
 	}
 
+	consumerName, err := os.Hostname()
+	if err != nil {
+		log.Fatal("Error getting hostname:", err)
+	}
+
 	// Recover jobs that were pending when the worker previously stopped.
 	log.Println("Recovering pending jobs...")
 
@@ -47,6 +53,7 @@ func main() {
 		db,
 		redisClient,
 		processJob,
+		consumerName,
 	)
 
 	// Start consuming new jobs.
@@ -56,5 +63,6 @@ func main() {
 		db,
 		redisClient,
 		processJob,
+		consumerName,
 	)
 }

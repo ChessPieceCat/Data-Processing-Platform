@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -158,17 +159,24 @@ func TestRecoverPendingCompletedJob(t *testing.T) {
 	db, redisClient := setupWorkerTest(t)
 
 	jobID := createTestJob(t, db, "completed")
-	messageID := enqueueAndPendTestJob(t, redisClient, jobID)
+
+	messageID := enqueueAndPendTestJob(
+		t,
+		redisClient,
+		jobID,
+	)
 
 	processed := false
 
-	RecoverPendingJobs(
+	recoverPendingJobs(
 		db,
 		redisClient,
 		func(jobID int64) error {
 			processed = true
 			return nil
 		},
+		"recovery-worker",
+		0,
 	)
 
 	if processed {
@@ -180,9 +188,11 @@ func TestRecoverPendingCompletedJob(t *testing.T) {
 		"job_queue",
 		"job_workers",
 	).Result()
-
 	if err != nil {
-		t.Fatalf("failed to inspect pending messages: %v", err)
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
 	}
 
 	if pending.Count != 0 {
@@ -198,17 +208,24 @@ func TestRecoverPendingFailedJob(t *testing.T) {
 	db, redisClient := setupWorkerTest(t)
 
 	jobID := createTestJob(t, db, "failed")
-	enqueueAndPendTestJob(t, redisClient, jobID)
+
+	messageID := enqueueAndPendTestJob(
+		t,
+		redisClient,
+		jobID,
+	)
 
 	processed := false
 
-	RecoverPendingJobs(
+	recoverPendingJobs(
 		db,
 		redisClient,
 		func(jobID int64) error {
 			processed = true
 			return nil
 		},
+		"recovery-worker",
+		0,
 	)
 
 	if processed {
@@ -220,14 +237,17 @@ func TestRecoverPendingFailedJob(t *testing.T) {
 		"job_queue",
 		"job_workers",
 	).Result()
-
 	if err != nil {
-		t.Fatalf("failed to inspect pending messages: %v", err)
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
 	}
 
 	if pending.Count != 0 {
 		t.Fatalf(
-			"expected failed job message to be acknowledged, got %d pending messages",
+			"expected failed job message %s to be acknowledged, got %d pending messages",
+			messageID,
 			pending.Count,
 		)
 	}
@@ -237,11 +257,16 @@ func TestRecoverPendingQueuedJob(t *testing.T) {
 	db, redisClient := setupWorkerTest(t)
 
 	jobID := createTestJob(t, db, "queued")
-	enqueueAndPendTestJob(t, redisClient, jobID)
+
+	messageID := enqueueAndPendTestJob(
+		t,
+		redisClient,
+		jobID,
+	)
 
 	var processedJobID int64
 
-	RecoverPendingJobs(
+	recoverPendingJobs(
 		db,
 		redisClient,
 		func(jobID int64) error {
@@ -249,12 +274,16 @@ func TestRecoverPendingQueuedJob(t *testing.T) {
 
 			// Simulate successful processing.
 			_, err := db.Exec(
-				`UPDATE jobs SET status = 'completed' WHERE id = $1`,
+				`UPDATE jobs
+				 SET status = 'completed'
+				 WHERE id = $1`,
 				jobID,
 			)
 
 			return err
 		},
+		"recovery-worker",
+		0,
 	)
 
 	if processedJobID != jobID {
@@ -270,14 +299,18 @@ func TestRecoverPendingQueuedJob(t *testing.T) {
 		"job_queue",
 		"job_workers",
 	).Result()
-
 	if err != nil {
-		t.Fatalf("failed to inspect pending messages: %v", err)
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
 	}
 
 	if pending.Count != 0 {
 		t.Fatalf(
-			"expected successfully reprocessed job to be acknowledged, got %d pending messages",
+			"expected successfully reprocessed job %d (%s) to be acknowledged, got %d pending messages",
+			jobID,
+			messageID,
 			pending.Count,
 		)
 	}
@@ -287,21 +320,33 @@ func TestRecoverPendingJobProcessingFailure(t *testing.T) {
 	db, redisClient := setupWorkerTest(t)
 
 	jobID := createTestJob(t, db, "processing")
-	enqueueAndPendTestJob(t, redisClient, jobID)
+
+	enqueueAndPendTestJob(
+		t,
+		redisClient,
+		jobID,
+	)
 
 	processed := false
 
-	RecoverPendingJobs(
+	recoverPendingJobs(
 		db,
 		redisClient,
 		func(jobID int64) error {
 			processed = true
-			return fmt.Errorf("simulated processing failure")
+
+			return fmt.Errorf(
+				"simulated processing failure",
+			)
 		},
+		"recovery-worker",
+		0,
 	)
 
 	if !processed {
-		t.Fatal("expected non-terminal job to be reprocessed")
+		t.Fatal(
+			"expected non-terminal job to be reprocessed",
+		)
 	}
 
 	pending, err := redisClient.XPending(
@@ -309,12 +354,154 @@ func TestRecoverPendingJobProcessingFailure(t *testing.T) {
 		"job_queue",
 		"job_workers",
 	).Result()
-
 	if err != nil {
-		t.Fatalf("failed to inspect pending messages: %v", err)
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
 	}
 
 	if pending.Count == 0 {
-		t.Fatal("expected failed reprocessing attempt to leave message pending")
+		t.Fatal(
+			"expected failed reprocessing attempt to leave message pending",
+		)
+	}
+}
+
+func TestWorkersProcessJobsConcurrently(t *testing.T) {
+	db, redisClient := setupWorkerTest(t)
+
+	ctx := context.Background()
+
+	// Create two independent jobs.
+	jobID1 := createTestJob(t, db, "dataset")
+	jobID2 := createTestJob(t, db, "dataset")
+
+	// Put both jobs into the Redis stream.
+	if err := jobs.EnqueueJob(
+		redisClient,
+		jobID1,
+	); err != nil {
+		t.Fatalf(
+			"failed to enqueue job %d: %v",
+			jobID1,
+			err,
+		)
+	}
+
+	if err := jobs.EnqueueJob(
+		redisClient,
+		jobID2,
+	); err != nil {
+		t.Fatalf(
+			"failed to enqueue job %d: %v",
+			jobID2,
+			err,
+		)
+	}
+
+	started := make(chan int64, 2)
+	finished := make(chan int64, 2)
+
+	// Both processors block here until the test knows that both workers
+	// have received a job. This lets us prove that processing overlaps.
+	release := make(chan struct{})
+
+	processJob := func(jobID int64) error {
+		started <- jobID
+
+		<-release
+
+		finished <- jobID
+		return nil
+	}
+
+	// Start two workers with different Redis consumer names.
+	go RunWorker(
+		db,
+		redisClient,
+		processJob,
+		"test-worker-1",
+	)
+
+	go RunWorker(
+		db,
+		redisClient,
+		processJob,
+		"test-worker-2",
+	)
+
+	// Wait until both workers have received a job.
+	received := make(map[int64]bool)
+
+	timeout := time.After(5 * time.Second)
+
+	for len(received) < 2 {
+		select {
+		case jobID := <-started:
+			received[jobID] = true
+
+		case <-timeout:
+			t.Fatalf(
+				"timed out waiting for two workers to receive jobs; received %v",
+				received,
+			)
+		}
+	}
+
+	if !received[jobID1] {
+		t.Fatalf(
+			"job %d was not received",
+			jobID1,
+		)
+	}
+
+	if !received[jobID2] {
+		t.Fatalf(
+			"job %d was not received",
+			jobID2,
+		)
+	}
+
+	// Release both processors simultaneously.
+	close(release)
+
+	finishedJobs := make(map[int64]bool)
+
+	timeout = time.After(5 * time.Second)
+
+	for len(finishedJobs) < 2 {
+		select {
+		case jobID := <-finished:
+			finishedJobs[jobID] = true
+
+		case <-timeout:
+			t.Fatalf(
+				"timed out waiting for both jobs to finish; finished %v",
+				finishedJobs,
+			)
+		}
+	}
+
+	// Give the workers a moment to acknowledge their messages.
+	time.Sleep(100 * time.Millisecond)
+
+	pending, err := redisClient.XPending(
+		ctx,
+		"job_queue",
+		"job_workers",
+	).Result()
+	if err != nil {
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
+	}
+
+	if pending.Count != 0 {
+		t.Fatalf(
+			"expected all concurrent jobs to be acknowledged, got %d pending messages",
+			pending.Count,
+		)
 	}
 }

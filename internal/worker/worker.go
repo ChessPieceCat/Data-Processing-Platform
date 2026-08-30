@@ -6,22 +6,24 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/redis/go-redis/v9"
 )
 
 const maxJobAttempts = 3
+const pendingJobMinIdle = 30 * time.Second
 
 // Connect to job_queue and wait for new jobs.
-func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error) {
+func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error, consumerName string) {
 	for {
 		// Read from the Redis stream.
 		streams, err := redisClient.XReadGroup(
 			context.Background(),
 			&redis.XReadGroupArgs{
 				Group:    "job_workers",
-				Consumer: "worker_1",
+				Consumer: consumerName,
 				Streams:  []string{"job_queue", ">"},
 				Block:    0, // Block indefinitely until a new message arrives.
 			},
@@ -81,74 +83,75 @@ func RecoverPendingJobs(
 	db *sql.DB,
 	redisClient *redis.Client,
 	processJob func(jobID int64) error,
+	consumerName string,
 ) {
-	// Get pending messages for the consumer group.
-	pendingMessages, err := redisClient.XPendingExt(
-		context.Background(),
-		&redis.XPendingExtArgs{
-			Stream: "job_queue",
-			Group:  "job_workers",
-			Start:  "-",
-			End:    "+",
-			Count:  100,
+	recoverPendingJobs(
+		db,
+		redisClient,
+		processJob,
+		consumerName,
+		pendingJobMinIdle,
+	)
+}
+
+func recoverPendingJobs(
+	db *sql.DB,
+	redisClient *redis.Client,
+	processJob func(jobID int64) error,
+	consumerName string,
+	minIdle time.Duration,
+) {
+	ctx := context.Background()
+
+	messages, _, err := redisClient.XAutoClaim(
+		ctx,
+		&redis.XAutoClaimArgs{
+			Stream:   "job_queue",
+			Group:    "job_workers",
+			Consumer: consumerName,
+			MinIdle:  minIdle,
+			Start:    "0-0",
+			Count:    100,
 		},
 	).Result()
 
 	if err != nil {
-		log.Println("Error fetching pending messages:", err)
+		log.Printf(
+			"Error claiming pending messages: %v",
+			err,
+		)
 		return
 	}
 
-	for _, pending := range pendingMessages {
-
-		// Get the Redis ID of the pending message and retrieve the
-		// job ID from the message.
-		messages, err := redisClient.XRange(
-			context.Background(),
-			"job_queue",
-			pending.ID,
-			pending.ID,
-		).Result()
-
-		if err != nil {
-			log.Printf(
-				"Error retrieving message for pending ID %s: %v",
-				pending.ID,
-				err,
-			)
-			continue
-		}
-
-		if len(messages) == 0 {
-			log.Printf(
-				"No message found for pending ID %s",
-				pending.ID,
-			)
-			continue
-		}
-
-		jobIDStr, ok := messages[0].Values["job_id"].(string)
+	for _, message := range messages {
+		jobIDStr, ok := message.Values["job_id"].(string)
 		if !ok {
 			log.Printf(
-				"Invalid job_id in message for pending ID %s: %v",
-				pending.ID,
-				messages[0].Values,
+				"Invalid job_id in pending message %s: %v",
+				message.ID,
+				message.Values,
 			)
 			continue
 		}
 
-		jobID, err := strconv.ParseInt(jobIDStr, 10, 64)
+		jobID, err := strconv.ParseInt(
+			jobIDStr,
+			10,
+			64,
+		)
 		if err != nil {
 			log.Printf(
-				"Error converting job_id to int64 for pending ID %s: %v",
-				pending.ID,
+				"Error converting job_id to int64 for pending message %s: %v",
+				message.ID,
 				err,
 			)
 			continue
 		}
 
-		// Check the current PostgreSQL state of the job.
-		job, err := jobs.GetJob(db, jobID)
+		job, err := jobs.GetJob(
+			db,
+			jobID,
+		)
 		if err != nil {
 			log.Printf(
 				"Error retrieving job %d: %v",
@@ -158,14 +161,14 @@ func RecoverPendingJobs(
 			continue
 		}
 
-		// Completed and failed jobs are already in terminal states,
-		// so acknowledge their Redis messages without reprocessing them.
-		if job.Status == "completed" || job.Status == "failed" {
+		if job.Status == "completed" ||
+			job.Status == "failed" {
+
 			if err := redisClient.XAck(
-				context.Background(),
+				ctx,
 				"job_queue",
 				"job_workers",
-				pending.ID,
+				message.ID,
 			).Err(); err != nil {
 				log.Printf(
 					"Error acknowledging terminal job %d: %v",
@@ -177,10 +180,18 @@ func RecoverPendingJobs(
 			continue
 		}
 
-		// Do not reprocess jobs that have reached the maximum number of attempts.
 		if job.Attempts >= maxJobAttempts {
-			errorMessage := fmt.Sprintf("Job %d reached maximum attempts (%d)", jobID, maxJobAttempts)
-			if err := jobs.FailJob(db, jobID, errorMessage); err != nil {
+			errorMessage := fmt.Sprintf(
+				"Job %d reached maximum attempts (%d)",
+				jobID,
+				maxJobAttempts,
+			)
+
+			if err := jobs.FailJob(
+				db,
+				jobID,
+				errorMessage,
+			); err != nil {
 				log.Printf(
 					"Error marking job %d as failed: %v",
 					jobID,
@@ -190,13 +201,13 @@ func RecoverPendingJobs(
 			}
 
 			if err := redisClient.XAck(
-				context.Background(),
+				ctx,
 				"job_queue",
 				"job_workers",
-				pending.ID,
+				message.ID,
 			).Err(); err != nil {
 				log.Printf(
-					"Error acknowledging job %d after marking as failed: %v",
+					"Error acknowledging job %d after marking it failed: %v",
 					jobID,
 					err,
 				)
@@ -205,25 +216,24 @@ func RecoverPendingJobs(
 			continue
 		}
 
-		// Reprocess jobs that have not reached a terminal state.
 		if err := processJob(jobID); err != nil {
 			log.Printf(
 				"Error reprocessing job %d: %v",
 				jobID,
 				err,
 			)
+
 			continue
 		}
 
-		// Acknowledge the message after successful reprocessing.
 		if err := redisClient.XAck(
-			context.Background(),
+			ctx,
 			"job_queue",
 			"job_workers",
-			pending.ID,
+			message.ID,
 		).Err(); err != nil {
 			log.Printf(
-				"Error acknowledging message for job %d: %v",
+				"Error acknowledging reprocessed job %d: %v",
 				jobID,
 				err,
 			)
