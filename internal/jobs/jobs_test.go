@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1445,6 +1446,86 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 	if result["runtime_seconds"] == nil {
 		t.Fatal(
 			"expected runtime_seconds in route results",
+		)
+	}
+}
+
+func TestStartJobPreventsDuplicateProcessing(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	jobID := createTestJob(
+		t,
+		db,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	results := make(chan error, 2)
+	start := make(chan struct{})
+
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			err := startJob(
+				db,
+				jobID,
+			)
+
+			results <- err
+		}()
+	}
+
+	// Release both goroutines at approximately the same time.
+	close(start)
+
+	wg.Wait()
+	close(results)
+
+	var errorsSeen []error
+	successCount := 0
+
+	for err := range results {
+		if err == nil {
+			successCount++
+		} else {
+			errorsSeen = append(errorsSeen, err)
+		}
+	}
+
+	if successCount != 1 {
+		t.Fatalf(
+			"expected exactly one successful job claim, got %d; errors: %v",
+			successCount,
+			errorsSeen,
+		)
+	}
+
+	job, err := GetJob(
+		db,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to retrieve job: %v",
+			err,
+		)
+	}
+
+	if job.Status != "processing" {
+		t.Fatalf(
+			"expected job status processing, got %q",
+			job.Status,
+		)
+	}
+
+	if job.Attempts != 1 {
+		t.Fatalf(
+			"expected exactly one processing attempt, got %d",
+			job.Attempts,
 		)
 	}
 }

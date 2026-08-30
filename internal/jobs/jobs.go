@@ -230,19 +230,30 @@ func saveResultReference(db *sql.DB, jobID int64, resultPath string) error {
 
 // startJob marks a job as processing and increments its attempt count.
 func startJob(db *sql.DB, jobID int64) error {
-	_, err := db.Exec(
+	result, err := db.Exec(
 		`UPDATE jobs
 		 SET status = $1,
 		     started_at = $2,
 			 attempts = attempts + 1
-		 WHERE id = $3`,
+		 WHERE id = $3
+		 	AND status = $4`,
 		"processing",
 		time.Now(),
 		jobID,
+		"queued",
 	)
 
 	if err != nil {
 		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("job %d is not in a queued state", jobID)
 	}
 
 	log.Printf("Job %d started", jobID)
