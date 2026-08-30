@@ -16,22 +16,34 @@ const maxJobAttempts = 3
 const pendingJobMinIdle = 30 * time.Second
 
 // Connect to job_queue and wait for new jobs.
-func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error, consumerName string) {
+func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error, consumerName string) {
 	for {
 		// Read from the Redis stream.
 		streams, err := redisClient.XReadGroup(
-			context.Background(),
+			ctx,
 			&redis.XReadGroupArgs{
 				Group:    "job_workers",
 				Consumer: consumerName,
 				Streams:  []string{"job_queue", ">"},
-				Block:    0, // Block indefinitely until a new message arrives.
+				Block:    time.Second,
 			},
 		).Result()
 
 		if err != nil {
-			fmt.Println("Error reading from Redis stream:", err)
+			if ctx.Err() != nil {
+				return
+			}
+
+			fmt.Println(
+				"Error reading from Redis stream:",
+				err,
+			)
+
 			continue
+		}
+
+		if ctx.Err() != nil {
+			return
 		}
 
 		for _, stream := range streams {
@@ -67,7 +79,7 @@ func RunWorker(db *sql.DB, redisClient *redis.Client, processJob func(jobID int6
 				}
 
 				if ack {
-					if err := redisClient.XAck(context.Background(), "job_queue", "job_workers", message.ID).Err(); err != nil {
+					if err := redisClient.XAck(ctx, "job_queue", "job_workers", message.ID).Err(); err != nil {
 						fmt.Println("Error acknowledging message:", err)
 					}
 				}

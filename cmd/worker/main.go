@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -57,9 +60,18 @@ func main() {
 	)
 
 	// Start consuming new jobs.
+
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
+
 	log.Println("Worker started")
 
 	worker.RunWorker(
+		ctx,
 		db,
 		redisClient,
 		processJob,

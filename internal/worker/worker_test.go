@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -371,28 +372,143 @@ func TestRecoverPendingJobProcessingFailure(t *testing.T) {
 func TestWorkersProcessJobsConcurrently(t *testing.T) {
 	db, redisClient := setupWorkerTest(t)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
+	defer cancel()
 
-	// Create two independent jobs.
-	jobID1 := createTestJob(t, db, "dataset")
-	jobID2 := createTestJob(t, db, "dataset")
+	var workerWG sync.WaitGroup
+	workerWG.Add(2)
 
-	// Put both jobs into the Redis stream.
+	firstStarted := make(chan int64, 1)
+	secondStarted := make(chan int64, 1)
+	release := make(chan struct{})
+
+	// Give each worker its own processing callback so the test can
+	// identify which consumer received a job.
+	processJob1 := func(jobID int64) error {
+		firstStarted <- jobID
+		<-release
+		return nil
+	}
+
+	processJob2 := func(jobID int64) error {
+		secondStarted <- jobID
+		<-release
+		return nil
+	}
+
+	// Start both workers before enqueueing any jobs.
+	go func() {
+		defer workerWG.Done()
+
+		RunWorker(
+			ctx,
+			db,
+			redisClient,
+			processJob1,
+			"test-worker-1",
+		)
+	}()
+
+	go func() {
+		defer workerWG.Done()
+
+		RunWorker(
+			ctx,
+			db,
+			redisClient,
+			processJob2,
+			"test-worker-2",
+		)
+	}()
+
+	// Give both workers time to enter XReadGroup and begin waiting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Create and enqueue the first job.
+	jobID1 := createTestJob(
+		t,
+		db,
+		"dataset",
+	)
+
 	if err := jobs.EnqueueJob(
 		redisClient,
 		jobID1,
 	); err != nil {
+		close(release)
+		cancel()
+		workerWG.Wait()
+
 		t.Fatalf(
 			"failed to enqueue job %d: %v",
 			jobID1,
 			err,
 		)
 	}
+
+	// Wait for one of the workers to receive the first job.
+	firstWorker := ""
+
+	select {
+	case receivedID := <-firstStarted:
+		if receivedID != jobID1 {
+			close(release)
+			cancel()
+			workerWG.Wait()
+
+			t.Fatalf(
+				"worker 1 received unexpected job %d; expected %d",
+				receivedID,
+				jobID1,
+			)
+		}
+
+		firstWorker = "test-worker-1"
+
+	case receivedID := <-secondStarted:
+		if receivedID != jobID1 {
+			close(release)
+			cancel()
+			workerWG.Wait()
+
+			t.Fatalf(
+				"worker 2 received unexpected job %d; expected %d",
+				receivedID,
+				jobID1,
+			)
+		}
+
+		firstWorker = "test-worker-2"
+
+	case <-time.After(5 * time.Second):
+		close(release)
+		cancel()
+		workerWG.Wait()
+
+		t.Fatal(
+			"timed out waiting for first worker to receive a job",
+		)
+	}
+
+	// The worker that received the first job is blocked in processJob.
+	// Enqueueing a second job should therefore make the other worker
+	// available to receive it.
+	jobID2 := createTestJob(
+		t,
+		db,
+		"dataset",
+	)
 
 	if err := jobs.EnqueueJob(
 		redisClient,
 		jobID2,
 	); err != nil {
+		close(release)
+		cancel()
+		workerWG.Wait()
+
 		t.Fatalf(
 			"failed to enqueue job %d: %v",
 			jobID2,
@@ -400,108 +516,124 @@ func TestWorkersProcessJobsConcurrently(t *testing.T) {
 		)
 	}
 
-	started := make(chan int64, 2)
-	finished := make(chan int64, 2)
-
-	// Both processors block here until the test knows that both workers
-	// have received a job. This lets us prove that processing overlaps.
-	release := make(chan struct{})
-
-	processJob := func(jobID int64) error {
-		started <- jobID
-
-		<-release
-
-		finished <- jobID
-		return nil
-	}
-
-	// Start two workers with different Redis consumer names.
-	go RunWorker(
-		db,
-		redisClient,
-		processJob,
-		"test-worker-1",
-	)
-
-	go RunWorker(
-		db,
-		redisClient,
-		processJob,
-		"test-worker-2",
-	)
-
-	// Wait until both workers have received a job.
-	received := make(map[int64]bool)
-
+	// Wait for the other worker to receive the second job.
 	timeout := time.After(5 * time.Second)
 
-	for len(received) < 2 {
+	switch firstWorker {
+	case "test-worker-1":
 		select {
-		case jobID := <-started:
-			received[jobID] = true
+		case receivedID := <-firstStarted:
+			close(release)
+			cancel()
+			workerWG.Wait()
+
+			t.Fatalf(
+				"worker 1 received second job %d; expected worker 2",
+				receivedID,
+			)
+
+		case receivedID := <-secondStarted:
+			if receivedID != jobID2 {
+				close(release)
+				cancel()
+				workerWG.Wait()
+
+				t.Fatalf(
+					"worker 2 received unexpected job %d; expected %d",
+					receivedID,
+					jobID2,
+				)
+			}
 
 		case <-timeout:
+			close(release)
+			cancel()
+			workerWG.Wait()
+
+			t.Fatal(
+				"timed out waiting for second worker to receive a job",
+			)
+		}
+
+	case "test-worker-2":
+		select {
+		case receivedID := <-secondStarted:
+			close(release)
+			cancel()
+			workerWG.Wait()
+
 			t.Fatalf(
-				"timed out waiting for two workers to receive jobs; received %v",
-				received,
+				"worker 2 received second job %d; expected worker 1",
+				receivedID,
+			)
+
+		case receivedID := <-firstStarted:
+			if receivedID != jobID2 {
+				close(release)
+				cancel()
+				workerWG.Wait()
+
+				t.Fatalf(
+					"worker 1 received unexpected job %d; expected %d",
+					receivedID,
+					jobID2,
+				)
+			}
+
+		case <-timeout:
+			close(release)
+			cancel()
+			workerWG.Wait()
+
+			t.Fatal(
+				"timed out waiting for second worker to receive a job",
 			)
 		}
 	}
 
-	if !received[jobID1] {
-		t.Fatalf(
-			"job %d was not received",
-			jobID1,
-		)
-	}
-
-	if !received[jobID2] {
-		t.Fatalf(
-			"job %d was not received",
-			jobID2,
-		)
-	}
-
-	// Release both processors simultaneously.
+	// Both workers are now blocked in processJob, which means both jobs
+	// are in flight concurrently.
 	close(release)
 
-	finishedJobs := make(map[int64]bool)
-
+	// Wait for both messages to be acknowledged.
 	timeout = time.After(5 * time.Second)
 
-	for len(finishedJobs) < 2 {
-		select {
-		case jobID := <-finished:
-			finishedJobs[jobID] = true
+	for {
+		pending, err := redisClient.XPending(
+			context.Background(),
+			"job_queue",
+			"job_workers",
+		).Result()
 
-		case <-timeout:
+		if err != nil {
+			cancel()
+			workerWG.Wait()
+
 			t.Fatalf(
-				"timed out waiting for both jobs to finish; finished %v",
-				finishedJobs,
+				"failed to inspect pending messages: %v",
+				err,
 			)
+		}
+
+		if pending.Count == 0 {
+			break
+		}
+
+		select {
+		case <-timeout:
+			cancel()
+			workerWG.Wait()
+
+			t.Fatalf(
+				"timed out waiting for jobs to be acknowledged; %d messages remain pending",
+				pending.Count,
+			)
+
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 
-	// Give the workers a moment to acknowledge their messages.
-	time.Sleep(100 * time.Millisecond)
-
-	pending, err := redisClient.XPending(
-		ctx,
-		"job_queue",
-		"job_workers",
-	).Result()
-	if err != nil {
-		t.Fatalf(
-			"failed to inspect pending messages: %v",
-			err,
-		)
-	}
-
-	if pending.Count != 0 {
-		t.Fatalf(
-			"expected all concurrent jobs to be acknowledged, got %d pending messages",
-			pending.Count,
-		)
-	}
+	// Stop both workers before setupWorkerTest closes the Redis client.
+	cancel()
+	workerWG.Wait()
 }
