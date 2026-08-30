@@ -637,3 +637,205 @@ func TestWorkersProcessJobsConcurrently(t *testing.T) {
 	cancel()
 	workerWG.Wait()
 }
+
+func TestPendingJobCanBeClaimedByOnlyOneConsumer(
+	t *testing.T,
+) {
+	_, redisClient := setupWorkerTest(t)
+
+	ctx := context.Background()
+
+	jobID := int64(12345)
+
+	if err := jobs.EnqueueJob(
+		redisClient,
+		jobID,
+	); err != nil {
+		t.Fatalf(
+			"failed to enqueue job %d: %v",
+			jobID,
+			err,
+		)
+	}
+
+	// Have the first consumer receive the message.
+	streams, err := redisClient.XReadGroup(
+		ctx,
+		&redis.XReadGroupArgs{
+			Group:    "job_workers",
+			Consumer: "test-worker-1",
+			Streams:  []string{"job_queue", ">"},
+			Block:    time.Second,
+			Count:    1,
+		},
+	).Result()
+	if err != nil {
+		t.Fatalf(
+			"failed to read job with first consumer: %v",
+			err,
+		)
+	}
+
+	if len(streams) != 1 ||
+		len(streams[0].Messages) != 1 {
+		t.Fatalf(
+			"expected first consumer to receive exactly one message",
+		)
+	}
+
+	messageID := streams[0].Messages[0].ID
+
+	// Verify that the message is pending.
+	pending, err := redisClient.XPendingExt(
+		ctx,
+		&redis.XPendingExtArgs{
+			Stream: "job_queue",
+			Group:  "job_workers",
+			Start:  "-",
+			End:    "+",
+			Count:  100,
+		},
+	).Result()
+	if err != nil {
+		t.Fatalf(
+			"failed to inspect pending messages: %v",
+			err,
+		)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf(
+			"expected exactly one pending message, got %d",
+			len(pending),
+		)
+	}
+
+	if pending[0].ID != messageID {
+		t.Fatalf(
+			"expected pending message %s, got %s",
+			messageID,
+			pending[0].ID,
+		)
+	}
+
+	if pending[0].Consumer != "test-worker-1" {
+		t.Fatalf(
+			"expected message to belong to test-worker-1, got %s",
+			pending[0].Consumer,
+		)
+	}
+
+	// Reclaim the pending message with a second consumer.
+	messages, _, err := redisClient.XAutoClaim(
+		ctx,
+		&redis.XAutoClaimArgs{
+			Stream:   "job_queue",
+			Group:    "job_workers",
+			Consumer: "test-worker-2",
+			MinIdle:  0,
+			Start:    "0-0",
+			Count:    1,
+		},
+	).Result()
+	if err != nil {
+		t.Fatalf(
+			"failed to auto-claim pending message: %v",
+			err,
+		)
+	}
+
+	if len(messages) != 1 {
+		t.Fatalf(
+			"expected second consumer to claim exactly one message, got %d",
+			len(messages),
+		)
+	}
+
+	if messages[0].ID != messageID {
+		t.Fatalf(
+			"expected claimed message %s, got %s",
+			messageID,
+			messages[0].ID,
+		)
+	}
+
+	// Verify that the message now belongs to the second consumer.
+	pending, err = redisClient.XPendingExt(
+		ctx,
+		&redis.XPendingExtArgs{
+			Stream: "job_queue",
+			Group:  "job_workers",
+			Start:  "-",
+			End:    "+",
+			Count:  100,
+		},
+	).Result()
+	if err != nil {
+		t.Fatalf(
+			"failed to inspect pending messages after claim: %v",
+			err,
+		)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf(
+			"expected exactly one pending message after claim, got %d",
+			len(pending),
+		)
+	}
+
+	if pending[0].ID != messageID {
+		t.Fatalf(
+			"expected pending message %s after claim, got %s",
+			messageID,
+			pending[0].ID,
+		)
+	}
+
+	if pending[0].Consumer != "test-worker-2" {
+		t.Fatalf(
+			"expected message to belong to test-worker-2 after claim, got %s",
+			pending[0].Consumer,
+		)
+	}
+}
+
+func TestRunWorkerShutsDownWhenContextIsCancelled(t *testing.T) {
+	db, redisClient := setupWorkerTest(t)
+
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
+
+	workerDone := make(chan struct{})
+
+	go func() {
+		defer close(workerDone)
+
+		RunWorker(
+			ctx,
+			db,
+			redisClient,
+			func(jobID int64) error {
+				return nil
+			},
+			"shutdown-test-worker",
+		)
+	}()
+
+	// Give the worker time to enter its Redis read loop.
+	time.Sleep(100 * time.Millisecond)
+
+	// Request shutdown.
+	cancel()
+
+	select {
+	case <-workerDone:
+		// Worker exited successfully.
+
+	case <-time.After(3 * time.Second):
+		t.Fatal(
+			"worker did not shut down after context cancellation",
+		)
+	}
+}

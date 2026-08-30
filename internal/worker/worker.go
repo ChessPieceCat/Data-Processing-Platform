@@ -34,10 +34,12 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 				return
 			}
 
-			fmt.Println(
-				"Error reading from Redis stream:",
-				err,
-			)
+			if err != redis.Nil {
+				log.Printf(
+					"Error reading from Redis stream: %v",
+					err,
+				)
+			}
 
 			continue
 		}

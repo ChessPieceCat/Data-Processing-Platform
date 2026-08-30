@@ -44,13 +44,26 @@ func main() {
 		)
 	}
 
+	// Use the container hostname as the Redis consumer name.
 	consumerName, err := os.Hostname()
 	if err != nil {
 		log.Fatal("Error getting hostname:", err)
 	}
 
+	// Create a context that is cancelled when the worker receives
+	// an interrupt or termination signal.
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
+
 	// Recover jobs that were pending when the worker previously stopped.
-	log.Println("Recovering pending jobs...")
+	log.Printf(
+		"Recovering pending jobs for consumer %s...",
+		consumerName,
+	)
 
 	worker.RecoverPendingJobs(
 		db,
@@ -60,21 +73,22 @@ func main() {
 	)
 
 	// Start consuming new jobs.
-
-	ctx, cancel := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
+	log.Printf(
+		"Worker started as consumer %s",
+		consumerName,
 	)
-	defer cancel()
-
-	log.Println("Worker started")
 
 	worker.RunWorker(
 		ctx,
 		db,
 		redisClient,
 		processJob,
+		consumerName,
+	)
+
+	// RunWorker returns after the context is cancelled.
+	log.Printf(
+		"Worker %s shut down cleanly",
 		consumerName,
 	)
 }
