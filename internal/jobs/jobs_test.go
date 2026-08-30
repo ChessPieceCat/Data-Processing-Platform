@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -48,6 +49,21 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	})
 
 	return db
+}
+
+func clearJobsTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	if _, err := db.Exec(`DELETE FROM jobs`); err != nil {
+		t.Fatalf(
+			"failed to clear jobs table: %v",
+			err,
+		)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM jobs`)
+	})
 }
 
 // createTestJob creates a dataset job and registers cleanup for the database row.
@@ -1526,6 +1542,155 @@ func TestStartJobPreventsDuplicateProcessing(t *testing.T) {
 		t.Fatalf(
 			"expected exactly one processing attempt, got %d",
 			job.Attempts,
+		)
+	}
+}
+
+func TestCreateJobWithLimit(t *testing.T) {
+	db := setupTestDatabase(t)
+	clearJobsTable(t, db)
+
+	for i := 0; i < MaxOutstandingJobs; i++ {
+		if _, err := CreateJobWithLimit(
+			db,
+			"dataset",
+		); err != nil {
+			t.Fatalf(
+				"failed to create job %d: %v",
+				i+1,
+				err,
+			)
+		}
+	}
+
+	if _, err := CreateJobWithLimit(
+		db,
+		"dataset",
+	); !errors.Is(err, ErrJobQueueFull) {
+		t.Fatalf(
+			"expected ErrJobQueueFull, got %v",
+			err,
+		)
+	}
+}
+
+func TestCreateJobWithLimitIgnoresCompletedJobs(
+	t *testing.T,
+) {
+	db := setupTestDatabase(t)
+	clearJobsTable(t, db)
+
+	for i := 0; i < MaxOutstandingJobs; i++ {
+		if _, err := CreateJobWithLimit(
+			db,
+			"dataset",
+		); err != nil {
+			t.Fatalf(
+				"failed to create job %d: %v",
+				i+1,
+				err,
+			)
+		}
+	}
+
+	_, err := db.Exec(
+		`UPDATE jobs
+		 SET status = 'completed'
+		 WHERE id = (
+			SELECT id
+			FROM jobs
+			ORDER BY id
+			LIMIT 1
+		 )`,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to complete test job: %v",
+			err,
+		)
+	}
+
+	if _, err := CreateJobWithLimit(
+		db,
+		"dataset",
+	); err != nil {
+		t.Fatalf(
+			"expected completed job to free capacity: %v",
+			err,
+		)
+	}
+}
+
+func TestCreateJobWithLimitPreventsConcurrentOverflow(
+	t *testing.T,
+) {
+	db := setupTestDatabase(t)
+	clearJobsTable(t, db)
+
+	for i := 0; i < MaxOutstandingJobs-1; i++ {
+		if _, err := CreateJobWithLimit(
+			db,
+			"dataset",
+		); err != nil {
+			t.Fatalf(
+				"failed to create initial job %d: %v",
+				i+1,
+				err,
+			)
+		}
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	results := make(chan error, 2)
+
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+
+			_, err := CreateJobWithLimit(
+				db,
+				"dataset",
+			)
+
+			results <- err
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	queueFullErrors := 0
+
+	for err := range results {
+		switch {
+		case err == nil:
+			successes++
+
+		case errors.Is(err, ErrJobQueueFull):
+			queueFullErrors++
+
+		default:
+			t.Fatalf(
+				"unexpected error: %v",
+				err,
+			)
+		}
+	}
+
+	if successes != 1 {
+		t.Fatalf(
+			"expected exactly one concurrent submission to succeed, got %d",
+			successes,
+		)
+	}
+
+	if queueFullErrors != 1 {
+		t.Fatalf(
+			"expected exactly one concurrent submission to be rejected, got %d",
+			queueFullErrors,
 		)
 	}
 }

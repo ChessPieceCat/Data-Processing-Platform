@@ -277,7 +277,7 @@ func prepareJob(
 	sourcePath string,
 	filename string,
 ) (int64, string, error) {
-	jobID, err := jobs.CreateJob(db, jobType)
+	jobID, err := jobs.CreateJobWithLimit(db, jobType)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to create job: %w", err)
 	}
@@ -324,7 +324,7 @@ func prepareRouteJob(
 	routeTempPath string,
 	distanceTempPath string,
 ) (int64, string, error) {
-	jobID, err := jobs.CreateJob(db, "route")
+	jobID, err := jobs.CreateJobWithLimit(db, "route")
 	if err != nil {
 		return 0, "", fmt.Errorf(
 			"failed to create route job: %w",
@@ -505,6 +505,15 @@ func RouteSubmissionHandler(
 		)
 
 		if err != nil {
+			if errors.Is(err, jobs.ErrJobQueueFull) {
+				http.Error(
+					w,
+					"Job queue is full. Please try again later.",
+					http.StatusTooManyRequests,
+				)
+				return
+			}
+
 			log.Println(
 				"Error preparing route job:",
 				err,
@@ -515,6 +524,7 @@ func RouteSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
+
 			return
 		}
 
@@ -653,7 +663,19 @@ func DatasetSubmissionHandler(
 			"dataset.csv",
 		)
 		if err != nil {
-			log.Println("Error preparing dataset job:", err)
+			if errors.Is(err, jobs.ErrJobQueueFull) {
+				http.Error(
+					w,
+					"Job queue is full. Please try again later.",
+					http.StatusTooManyRequests,
+				)
+				return
+			}
+
+			log.Println(
+				"Error preparing dataset job:",
+				err,
+			)
 
 			http.Error(
 				w,
@@ -783,6 +805,15 @@ func ImageSubmissionHandler(
 			"input"+filepath.Ext(tempPath),
 		)
 		if err != nil {
+			if errors.Is(err, jobs.ErrJobQueueFull) {
+				http.Error(
+					w,
+					"Job queue is full. Please try again later.",
+					http.StatusTooManyRequests,
+				)
+				return
+			}
+
 			log.Println(
 				"Error preparing image job:",
 				err,
