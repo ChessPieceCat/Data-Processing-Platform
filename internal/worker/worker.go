@@ -25,6 +25,7 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 				Group:    "job_workers",
 				Consumer: consumerName,
 				Streams:  []string{"job_queue", ">"},
+				Count:    1,
 				Block:    time.Second,
 			},
 		).Result()
