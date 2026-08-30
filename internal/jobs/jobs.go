@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,70 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
+
+const MaxOutstandingJobs = 100
+
+var ErrJobQueueFull = errors.New("job queue is full")
+
+func CreateJobWithLimit(
+	db *sql.DB,
+	jobType string,
+) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+
+	defer tx.Rollback()
+
+	// Serialize job admission checks so concurrent submissions
+	// cannot both pass the limit check.
+	if _, err := tx.Exec(
+		`SELECT pg_advisory_xact_lock($1)`,
+		int64(1001),
+	); err != nil {
+		return 0, err
+	}
+
+	var outstandingJobs int
+
+	if err := tx.QueryRow(
+		`SELECT COUNT(*)
+		 FROM jobs
+		 WHERE status IN ('queued', 'processing')`,
+	).Scan(&outstandingJobs); err != nil {
+		return 0, err
+	}
+
+	if outstandingJobs >= MaxOutstandingJobs {
+		return 0, ErrJobQueueFull
+	}
+
+	var jobID int64
+
+	if err := tx.QueryRow(
+		`INSERT INTO jobs (type, status, created_at)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+		jobType,
+		"queued",
+		time.Now(),
+	).Scan(&jobID); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	log.Printf(
+		"Created job %d of type %s",
+		jobID,
+		jobType,
+	)
+
+	return jobID, nil
+}
 
 // CreateJob creates a new job and returns its database-generated ID.
 func CreateJob(db *sql.DB, jobType string) (int64, error) {
@@ -230,19 +295,30 @@ func saveResultReference(db *sql.DB, jobID int64, resultPath string) error {
 
 // startJob marks a job as processing and increments its attempt count.
 func startJob(db *sql.DB, jobID int64) error {
-	_, err := db.Exec(
+	result, err := db.Exec(
 		`UPDATE jobs
 		 SET status = $1,
 		     started_at = $2,
 			 attempts = attempts + 1
-		 WHERE id = $3`,
+		 WHERE id = $3
+		 	AND status = $4`,
 		"processing",
 		time.Now(),
 		jobID,
+		"queued",
 	)
 
 	if err != nil {
 		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("job %d is not in a queued state", jobID)
 	}
 
 	log.Printf("Job %d started", jobID)

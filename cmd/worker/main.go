@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -40,21 +44,51 @@ func main() {
 		)
 	}
 
+	// Use the container hostname as the Redis consumer name.
+	consumerName, err := os.Hostname()
+	if err != nil {
+		log.Fatal("Error getting hostname:", err)
+	}
+
+	// Create a context that is cancelled when the worker receives
+	// an interrupt or termination signal.
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
+
 	// Recover jobs that were pending when the worker previously stopped.
-	log.Println("Recovering pending jobs...")
+	log.Printf(
+		"Recovering pending jobs for consumer %s...",
+		consumerName,
+	)
 
 	worker.RecoverPendingJobs(
 		db,
 		redisClient,
 		processJob,
+		consumerName,
 	)
 
 	// Start consuming new jobs.
-	log.Println("Worker started")
+	log.Printf(
+		"Worker started as consumer %s",
+		consumerName,
+	)
 
 	worker.RunWorker(
+		ctx,
 		db,
 		redisClient,
 		processJob,
+		consumerName,
+	)
+
+	// RunWorker returns after the context is cancelled.
+	log.Printf(
+		"Worker %s shut down cleanly",
+		consumerName,
 	)
 }

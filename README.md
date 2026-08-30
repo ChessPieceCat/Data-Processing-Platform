@@ -25,10 +25,17 @@ The current implementation supports:
   - processing
   - completed
   - failed
-- Worker recovery of pending jobs after worker crashes or restarts
-- Retry limits for interrupted jobs
+- Multiple concurrent worker replicas consuming from a shared Redis consumer group
+- Unique Redis consumer identities for individual workers
+- Pending-job recovery and reassignment after worker interruption
+- Bounded retry handling for interrupted jobs
+- Atomic job claiming to prevent duplicate processing
+- Maximum outstanding-job limit of 100
+- HTTP 429 backpressure when the outstanding-job limit is reached
+- Context-aware worker cancellation and graceful shutdown
 - Processor timeout handling
 - Configurable database and Redis connection settings
+- Worker throughput and latency benchmarking
 
 ### Dataset Processing
 
@@ -106,7 +113,7 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 - Pending-job recovery after worker interruption or restart
 - Bounded retries for interrupted jobs
 - Processor execution timeouts
-- Safe handling of duplicate job delivery where practical
+- Duplicate-delivery protection through Redis consumer groups and atomic PostgreSQL job claiming
 - Cleanup of temporary and per-job files
 - Database and Redis health checks in the containerized development environment
 
@@ -115,6 +122,9 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 - Automatic cleanup of older jobs while retaining the most recent jobs
 - Automated Go and Python tests
 - GitHub Actions CI for Go tests, all Python processor tests, and both Go binaries
+- Three worker replicas by default in Docker Compose
+- Configurable worker scaling through Docker Compose
+- Queue backpressure with a maximum of 100 outstanding queued or processing jobs
 
 ---
 
@@ -129,11 +139,21 @@ Browser
 Go HTTP server
    |
    +---- PostgreSQL
+   |       |
+   |       +--- job state
+   |       +--- job metadata
    |
    +---- Redis Stream
              |
              v
-        Go Worker
+      Redis Consumer Group
+             |
+       +-----+-----+-----+
+       |           |     |
+       v           v     v
+   Worker 1     Worker 2 Worker 3
+       |           |       |
+       +-----+-----+-------+
              |
              v
          ProcessJob
@@ -170,7 +190,15 @@ The Go application creates a job in PostgreSQL and enqueues its job ID in a Redi
 
 Job-specific processors are responsible for performing domain-specific work and producing result artifacts. The shared job system does not need to be rewritten when another processor is added; a processor can be added for a new job type while preserving the common Redis and worker infrastructure.
 
-Redis Streams use at-least-once delivery semantics. The worker acknowledges messages after processing has completed successfully or after a permanent processing failure has been recorded. Pending messages can be recovered when a worker is restarted. Interrupted jobs are tracked with an attempt count and are prevented from retrying indefinitely.
+Redis Streams use at-least-once delivery semantics through a shared consumer group. Each message is delivered to a single consumer within the group at a time, while remaining subject to at-least-once redelivery. The worker acknowledges messages after processing has completed successfully or after a permanent processing failure has been recorded.
+
+Pending messages can be recovered and reassigned with Redis `XAUTOCLAIM` when they have remained idle longer than the configured recovery threshold. PostgreSQL job state is checked before recovered jobs are processed so completed and permanently failed jobs are not reprocessed.
+
+Job claiming is also protected at the database level. A job can transition from `queued` to `processing` only once, and concurrent attempts to claim the same job are rejected after the first successful claim.
+
+Workers use cancellable Redis reads and respond to process termination signals for graceful shutdown. Multiple workers can therefore operate concurrently while still allowing individual workers to stop and restart without taking down the worker pool.
+
+The application also enforces a maximum of 100 outstanding jobs, counting both `queued` and `processing` jobs. Submissions beyond this limit are rejected with HTTP 429 rather than allowing an unbounded backlog to accumulate.
 
 PostgreSQL remains responsible for persistent job state and metadata, while Redis is responsible for transporting work between the API and worker.
 
@@ -201,7 +229,9 @@ internal/redis/
     Redis connection and Stream configuration
 
 internal/worker/
-    Redis worker, pending-job recovery, and retry limits
+    Redis worker pool, consumer-group processing,
+    pending-job recovery, graceful shutdown,
+    concurrency tests, and performance benchmarks
 
 processors/dataset/
     Python dataset processor and tests
@@ -332,11 +362,13 @@ Then start the Go server:
 go run ./cmd/server
 ```
 
-If you also want asynchronous job processing outside Docker, start the worker separately:
+If you also want asynchronous job processing outside Docker, start one or more worker processes separately:
 
 ```bash
 go run ./cmd/worker
 ```
+
+Each worker uses its process hostname as its Redis consumer name, allowing multiple locally started workers to participate in the same Redis consumer group.
 
 The server listens on:
 
@@ -365,10 +397,20 @@ docker compose up -d --build
 The Compose environment includes:
 
 - `app` — Go HTTP server
-- `worker` — Go background worker
+- `worker` — Go background worker pool
 - `db` — PostgreSQL
 - `redis` — Redis
 - `pgadmin` — pgAdmin
+
+The default Compose configuration runs three worker replicas. Worker replicas share the same Redis consumer group while using unique consumer names derived from their container hostnames.
+
+Additional worker capacity can be requested through Compose scaling, for example:
+
+```bash
+docker compose up -d --scale worker=5
+```
+
+The worker pool can therefore be scaled independently from the HTTP server.
 
 The application and worker use the Compose service names for PostgreSQL and Redis. The application and worker share the `uploads_data` volume so both can access the same job directories.
 
@@ -420,6 +462,17 @@ pytest -v
 cd ../..
 ```
 
+### Worker Performance Benchmark
+
+Run the worker throughput benchmark with:
+
+```bash
+go test ./internal/worker \
+  -bench BenchmarkWorkerThroughput \
+  -benchtime=1x \
+  -run '^$'
+```
+
 The route test suite covers:
 
 - configuration loading and validation
@@ -433,6 +486,39 @@ The route test suite covers:
 - processor orchestration
 
 The Go test suite covers application handlers, job processing, configuration, Redis behavior, worker behavior, database integration, and route integration.
+
+Worker tests additionally cover:
+
+- concurrent processing across multiple workers
+- Redis consumer-group message claiming
+- pending-job recovery and reassignment
+- prevention of duplicate job claims
+- graceful worker shutdown
+- queue acknowledgement behavior
+- backpressure and outstanding-job limits
+- concurrent submissions at the queue limit
+
+Worker performance benchmarking measures:
+
+- throughput in jobs per second
+- average queue latency
+- p95 queue latency
+- average processing latency
+- p95 processing latency
+- average total latency
+- p95 total latency
+
+A controlled benchmark using a fixed 100 ms processing workload was used to compare one, two, and three concurrent workers.
+
+The benchmark produced the following results on the development system:
+
+| Workers | Throughput | Avg Queue Latency | Avg Total Latency |
+|---:|---:|---:|---:|
+| 1 | 9.9 jobs/sec | 1.47 s | 1.57 s |
+| 2 | 19.8 jobs/sec | 718 ms | 818 ms |
+| 3 | 29.6 jobs/sec | 466 ms | 567 ms |
+
+Processing latency remained approximately 100 ms across all configurations. Increasing the worker count therefore increased throughput while reducing queue and total job latency.
 
 The GitHub Actions workflow runs the Go tests, all three Python test suites, and builds both `cmd/server` and `cmd/worker`.
 
@@ -574,9 +660,15 @@ The route processor first constructs a nearest-neighbor route and then applies 2
 
 The job system distinguishes between successful and failed processing states and records useful error information in PostgreSQL.
 
-Redis pending messages are recovered when the worker starts. Jobs left in a non-terminal state can be retried, while completed and permanently failed jobs are acknowledged without reprocessing.
+Redis pending messages are recovered when workers start and can be reassigned between consumers when they become eligible for recovery. Jobs left in a non-terminal state can be retried, while completed and permanently failed jobs are acknowledged without reprocessing.
 
 Job attempts are tracked in PostgreSQL. Interrupted jobs are retried only up to the configured maximum attempt count. The current maximum is three processing attempts.
+
+Job claiming is protected at the PostgreSQL level. Only jobs that are still in the `queued` state can be transitioned to `processing`, and the update result is checked so concurrent attempts to claim the same job cannot both succeed.
+
+Workers run as independent Redis consumers within a shared consumer group. A worker can be stopped and restarted without stopping the remaining workers. Worker processes use signal-aware contexts and cancellable Redis reads so they can terminate cleanly.
+
+The application also enforces backpressure by limiting the number of outstanding `queued` and `processing` jobs to 100. Attempts to submit work after the limit is reached receive HTTP 429 responses and do not create additional job records.
 
 Processor execution is bounded by a 60-second timeout. A processor that exceeds the timeout is terminated and the job is recorded as failed.
 
@@ -590,11 +682,17 @@ The system has been tested against:
 - database failure
 - Redis/queue failure
 - duplicate job delivery
+- concurrent job processing
+- concurrent job claiming
+- pending-job reassignment
 - partial processing
 - processor timeouts
 - application/worker restart during processing
+- worker shutdown and restart
+- queue-limit enforcement
+- concurrent submissions at the queue limit
 
-Redis uses at-least-once delivery semantics, so duplicate delivery is possible. Processing is designed to tolerate duplicate execution where practical without creating duplicate PostgreSQL job records.
+Redis uses at-least-once delivery semantics, so duplicate delivery is possible. Redis consumer-group ownership and PostgreSQL job claiming work together to prevent an already-claimed job from being started a second time.
 
 ---
 
@@ -602,7 +700,9 @@ Redis uses at-least-once delivery semantics, so duplicate delivery is possible. 
 
 This repository represents the first implementation of the platform.
 
-The current architecture separates generic job orchestration from domain-specific processing. The Go HTTP server handles API requests and submission, Redis and the dedicated worker handle asynchronous delivery, `ProcessJob` handles the common job lifecycle and processor dispatching, and individual processors handle job-specific execution.
+The current architecture separates generic job orchestration from domain-specific processing. The Go HTTP server handles API requests and submission, Redis and the worker pool handle asynchronous delivery, `ProcessJob` handles the common job lifecycle and processor dispatching, and individual processors handle job-specific execution.
+
+The worker pool uses Redis consumer groups for concurrent processing, PostgreSQL for atomic job claiming and job-state authority, and bounded queue admission to prevent unbounded outstanding work.
 
 Dataset, image, and route processing currently share the same job system and worker infrastructure. Adding another processor does not require rewriting the core queue or worker architecture.
 
@@ -622,11 +722,10 @@ Planned future work includes:
 - route visualizations or other specialized artifacts
 - additional job types and processors
 - further worker and processing abstractions where shared behavior warrants them
-- improved concurrency and reliability handling
 - broader integration testing
 - deployment and infrastructure work
 - monitoring and observability
-- security hardening
+- additional security hardening
 
 ---
 

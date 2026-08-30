@@ -43,6 +43,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    deploy:
+      replicas: 3
 
   db:
     image: postgres:18
