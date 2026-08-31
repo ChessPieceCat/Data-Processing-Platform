@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"text/template"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -273,42 +275,83 @@ func loadImagePageResults(page *ResultsPage) error {
 // and saves the input reference.
 func prepareJob(
 	db *sql.DB,
+	store storage.Storage,
 	jobType string,
 	sourcePath string,
 	filename string,
 ) (int64, string, error) {
-	jobID, err := jobs.CreateJobWithLimit(db, jobType)
+	jobID, err := jobs.CreateJobWithLimit(
+		db,
+		jobType,
+	)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to create job: %w", err)
-	}
-
-	jobDirectory := fmt.Sprintf("uploads/%d", jobID)
-
-	if err := os.MkdirAll(jobDirectory, 0755); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
-
 		return 0, "", fmt.Errorf(
-			"failed to create job directory: %w",
+			"failed to create job: %w",
 			err,
 		)
 	}
 
-	inputPath := filepath.Join(
-		jobDirectory,
+	inputKey := fmt.Sprintf(
+		"jobs/%d/%s",
+		jobID,
 		filename,
 	)
 
-	if err := os.Rename(sourcePath, inputPath); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+	inputFile, err := os.Open(sourcePath)
+	if err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
-			"failed to move input file: %w",
+			"failed to open input file: %w",
+			err,
+		)
+	}
+	defer inputFile.Close()
+
+	if err := store.Put(
+		context.Background(),
+		inputKey,
+		inputFile,
+	); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to store input file: %w",
 			err,
 		)
 	}
 
-	if err := saveInputReference(db, inputPath, jobID); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+	if err := os.Remove(sourcePath); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to remove temporary input file: %w",
+			err,
+		)
+	}
+
+	if err := saveInputReference(
+		db,
+		inputKey,
+		jobID,
+	); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
 			"failed to save input reference: %w",
@@ -316,15 +359,19 @@ func prepareJob(
 		)
 	}
 
-	return jobID, inputPath, nil
+	return jobID, inputKey, nil
 }
 
 func prepareRouteJob(
 	db *sql.DB,
+	store storage.Storage,
 	routeTempPath string,
 	distanceTempPath string,
 ) (int64, string, error) {
-	jobID, err := jobs.CreateJobWithLimit(db, "route")
+	jobID, err := jobs.CreateJobWithLimit(
+		db,
+		"route",
+	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
 			"failed to create route job: %w",
@@ -332,65 +379,142 @@ func prepareRouteJob(
 		)
 	}
 
-	jobDirectory := filepath.Join(
-		"uploads",
-		strconv.FormatInt(jobID, 10),
+	routeKey := fmt.Sprintf(
+		"jobs/%d/route.csv",
+		jobID,
 	)
 
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+	distanceKey := fmt.Sprintf(
+		"jobs/%d/distances.csv",
+		jobID,
+	)
+
+	routeFile, err := os.Open(routeTempPath)
+	if err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
-			"failed to create route job directory: %w",
+			"failed to open route CSV: %w",
 			err,
 		)
 	}
 
-	routePath := filepath.Join(
-		jobDirectory,
-		"route.csv",
-	)
-
-	distancePath := filepath.Join(
-		jobDirectory,
-		"distances.csv",
-	)
-
-	if err := os.Rename(
-		routeTempPath,
-		routePath,
+	if err := store.Put(
+		context.Background(),
+		routeKey,
+		routeFile,
 	); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+		routeFile.Close()
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
-			"failed to move route CSV: %w",
+			"failed to store route CSV: %w",
 			err,
 		)
 	}
 
-	if err := os.Rename(
-		distanceTempPath,
-		distancePath,
-	); err != nil {
-		_ = os.Remove(routePath)
-		_ = jobs.DeleteJob(db, jobID)
+	if err := routeFile.Close(); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
-			"failed to move distance CSV: %w",
+			"failed to close route CSV: %w",
+			err,
+		)
+	}
+
+	distanceFile, err := os.Open(distanceTempPath)
+	if err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to open distance CSV: %w",
+			err,
+		)
+	}
+
+	if err := store.Put(
+		context.Background(),
+		distanceKey,
+		distanceFile,
+	); err != nil {
+		distanceFile.Close()
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to store distance CSV: %w",
+			err,
+		)
+	}
+
+	if err := distanceFile.Close(); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to close distance CSV: %w",
+			err,
+		)
+	}
+
+	if err := os.Remove(routeTempPath); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to remove temporary route CSV: %w",
+			err,
+		)
+	}
+
+	if err := os.Remove(distanceTempPath); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
+
+		return 0, "", fmt.Errorf(
+			"failed to remove temporary distance CSV: %w",
 			err,
 		)
 	}
 
 	if err := saveInputReference(
 		db,
-		routePath,
+		routeKey,
 		jobID,
 	); err != nil {
-		_ = os.RemoveAll(jobDirectory)
-		_ = jobs.DeleteJob(db, jobID)
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return 0, "", fmt.Errorf(
 			"failed to save route input reference: %w",
@@ -398,18 +522,23 @@ func prepareRouteJob(
 		)
 	}
 
-	return jobID, routePath, nil
+	return jobID, routeKey, nil
 }
 
 // finalizeJobSubmission saves the job configuration and enqueues the job.
 func finalizeJobSubmission(
 	db *sql.DB,
 	redisClient *redis.Client,
+	store storage.Storage,
 	jobID int64,
 	saveConfig func(int64) (string, error),
 ) error {
 	if _, err := saveConfig(jobID); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return fmt.Errorf(
 			"failed to save job configuration: %w",
@@ -417,8 +546,15 @@ func finalizeJobSubmission(
 		)
 	}
 
-	if err := jobs.EnqueueJob(redisClient, jobID); err != nil {
-		_ = jobs.DeleteJob(db, jobID)
+	if err := jobs.EnqueueJob(
+		redisClient,
+		jobID,
+	); err != nil {
+		_ = jobs.DeleteJob(
+			db,
+			jobID,
+			store,
+		)
 
 		return fmt.Errorf(
 			"failed to enqueue job: %w",
@@ -433,6 +569,7 @@ func finalizeJobSubmission(
 func RouteSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
+	store storage.Storage,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -457,27 +594,23 @@ func RouteSubmissionHandler(
 					"Route files have not been uploaded.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, errInvalidUploadID):
 				http.Error(
 					w,
 					"Invalid upload ID.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, os.ErrNotExist):
 				http.Error(
 					w,
 					"Temporary route files were not found.",
 					http.StatusBadRequest,
 				)
-
 			default:
 				log.Println(
 					"Error checking temporary route files:",
 					err,
 				)
-
 				http.Error(
 					w,
 					"Internal server error",
@@ -498,14 +631,17 @@ func RouteSubmissionHandler(
 			return
 		}
 
-		jobID, routePath, err := prepareRouteJob(
+		jobID, routeKey, err := prepareRouteJob(
 			db,
+			store,
 			routeTempPath,
 			distanceTempPath,
 		)
-
 		if err != nil {
-			if errors.Is(err, jobs.ErrJobQueueFull) {
+			if errors.Is(
+				err,
+				jobs.ErrJobQueueFull,
+			) {
 				http.Error(
 					w,
 					"Job queue is full. Please try again later.",
@@ -524,50 +660,30 @@ func RouteSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
-
 			return
 		}
 
 		log.Printf(
-			"Moved route files for job %d to %s",
+			"Stored route input for job %d as %s",
 			jobID,
-			filepath.Dir(routePath),
+			routeKey,
 		)
 
-		if _, err := jobs.SaveRouteConfig(
-			config,
-			jobID,
-		); err != nil {
-			_ = os.RemoveAll(
-				filepath.Dir(routePath),
-			)
-			_ = jobs.DeleteJob(db, jobID)
-
-			log.Printf(
-				"Error saving route configuration for job %d: %v",
-				jobID,
-				err,
-			)
-
-			http.Error(
-				w,
-				"Internal server error",
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		if err := jobs.EnqueueJob(
+		if err := finalizeJobSubmission(
+			db,
 			redisClient,
+			store,
 			jobID,
+			func(jobID int64) (string, error) {
+				return jobs.SaveRouteConfig(
+					config,
+					jobID,
+					store,
+				)
+			},
 		); err != nil {
-			_ = os.RemoveAll(
-				filepath.Dir(routePath),
-			)
-			_ = jobs.DeleteJob(db, jobID)
-
 			log.Printf(
-				"Error enqueuing route job %d: %v",
+				"Error finalizing route job %d: %v",
 				jobID,
 				err,
 			)
@@ -593,6 +709,7 @@ func RouteSubmissionHandler(
 func DatasetSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
+	store storage.Storage,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -606,7 +723,9 @@ func DatasetSubmissionHandler(
 
 		uploadID := r.FormValue("uploadID")
 
-		tempPath, err := getTemporaryDataset(uploadID)
+		tempPath, err := getTemporaryDataset(
+			uploadID,
+		)
 		if err != nil {
 			switch {
 			case errors.Is(err, errDatasetNotInspected):
@@ -615,27 +734,23 @@ func DatasetSubmissionHandler(
 					"Dataset has not been inspected.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, errInvalidUploadID):
 				http.Error(
 					w,
 					"Invalid upload ID.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, os.ErrNotExist):
 				http.Error(
 					w,
 					"Temporary dataset was not found.",
 					http.StatusBadRequest,
 				)
-
 			default:
 				log.Println(
 					"Error checking temporary dataset:",
 					err,
 				)
-
 				http.Error(
 					w,
 					"Internal server error",
@@ -656,14 +771,18 @@ func DatasetSubmissionHandler(
 			return
 		}
 
-		jobID, filePath, err := prepareJob(
+		jobID, fileKey, err := prepareJob(
 			db,
+			store,
 			"dataset",
 			tempPath,
 			"dataset.csv",
 		)
 		if err != nil {
-			if errors.Is(err, jobs.ErrJobQueueFull) {
+			if errors.Is(
+				err,
+				jobs.ErrJobQueueFull,
+			) {
 				http.Error(
 					w,
 					"Job queue is full. Please try again later.",
@@ -682,24 +801,25 @@ func DatasetSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
-
 			return
 		}
 
 		log.Printf(
-			"Moved temporary dataset to %s for job %d",
-			filePath,
+			"Stored dataset input for job %d as %s",
 			jobID,
+			fileKey,
 		)
 
 		if err := finalizeJobSubmission(
 			db,
 			redisClient,
+			store,
 			jobID,
 			func(jobID int64) (string, error) {
 				return jobs.SaveDatasetConfig(
 					config,
 					jobID,
+					store,
 				)
 			},
 		); err != nil {
@@ -714,7 +834,6 @@ func DatasetSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
-
 			return
 		}
 
@@ -731,6 +850,7 @@ func DatasetSubmissionHandler(
 func ImageSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
+	store storage.Storage,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -742,11 +862,11 @@ func ImageSubmissionHandler(
 			return
 		}
 
-		// Get the temporary upload ID.
 		uploadID := r.FormValue("uploadID")
 
-		// Find the temporary image.
-		tempPath, err := getTemporaryImage(uploadID)
+		tempPath, err := getTemporaryImage(
+			uploadID,
+		)
 		if err != nil {
 			switch {
 			case errors.Is(err, errImageNotInspected):
@@ -755,27 +875,23 @@ func ImageSubmissionHandler(
 					"Image has not been inspected.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, errInvalidUploadID):
 				http.Error(
 					w,
 					"Invalid upload ID.",
 					http.StatusBadRequest,
 				)
-
 			case errors.Is(err, os.ErrNotExist):
 				http.Error(
 					w,
 					"Temporary image was not found.",
 					http.StatusBadRequest,
 				)
-
 			default:
 				log.Println(
 					"Error checking temporary image:",
 					err,
 				)
-
 				http.Error(
 					w,
 					"Internal server error",
@@ -786,7 +902,6 @@ func ImageSubmissionHandler(
 			return
 		}
 
-		// Read the image configuration.
 		config, err := getImageConfig(r)
 		if err != nil {
 			http.Error(
@@ -797,15 +912,18 @@ func ImageSubmissionHandler(
 			return
 		}
 
-		// Prepare the job and move the image into its job directory.
-		jobID, filePath, err := prepareJob(
+		jobID, fileKey, err := prepareJob(
 			db,
+			store,
 			"image",
 			tempPath,
 			"input"+filepath.Ext(tempPath),
 		)
 		if err != nil {
-			if errors.Is(err, jobs.ErrJobQueueFull) {
+			if errors.Is(
+				err,
+				jobs.ErrJobQueueFull,
+			) {
 				http.Error(
 					w,
 					"Job queue is full. Please try again later.",
@@ -824,25 +942,25 @@ func ImageSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
-
 			return
 		}
 
 		log.Printf(
-			"Moved temporary image to %s for job %d",
-			filePath,
+			"Stored image input for job %d as %s",
 			jobID,
+			fileKey,
 		)
 
-		// Save the configuration and enqueue the job.
 		if err := finalizeJobSubmission(
 			db,
 			redisClient,
+			store,
 			jobID,
 			func(jobID int64) (string, error) {
 				return jobs.SaveImageConfig(
 					config,
 					jobID,
+					store,
 				)
 			},
 		); err != nil {
@@ -857,7 +975,6 @@ func ImageSubmissionHandler(
 				"Internal server error",
 				http.StatusInternalServerError,
 			)
-
 			return
 		}
 

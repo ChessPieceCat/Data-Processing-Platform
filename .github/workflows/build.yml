@@ -58,6 +58,8 @@ jobs:
           pip install -r processors/image/requirements.txt
 
       - name: Run Go tests
+        env:
+          DB_SSLMODE: disable
         run: go test ./...
 
       - name: Run Python tests

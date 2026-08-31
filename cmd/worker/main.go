@@ -10,6 +10,7 @@ import (
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/worker"
 )
 
@@ -36,11 +37,22 @@ func main() {
 		log.Fatal(err)
 	}
 
+	store, err := storage.NewFromEnvironment(
+		context.Background(),
+	)
+	if err != nil {
+		log.Fatal(
+			"Error initializing storage:",
+			err,
+		)
+	}
+
 	// Define the job processing function.
 	processJob := func(jobID int64) error {
 		return jobs.ProcessJob(
 			db,
 			jobID,
+			store,
 		)
 	}
 

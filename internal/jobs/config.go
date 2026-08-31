@@ -1,9 +1,13 @@
 package jobs
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 )
 
 type DatasetConfig struct {
@@ -28,19 +32,33 @@ type RandomForestConfig struct {
 	MaxDepth    int `json:"max_depth,omitempty"`
 }
 
-func SaveDatasetConfig(config DatasetConfig, jobID int64) (string, error) {
-	configPath := fmt.Sprintf("uploads/%d/config.json", jobID)
+func SaveDatasetConfig(config DatasetConfig, jobID int64, store storage.Storage) (string, error) {
+	configKey := fmt.Sprintf(
+		"jobs/%d/config.json",
+		jobID,
+	)
 
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.MarshalIndent(
+		config,
+		"",
+		"  ",
+	)
 	if err != nil {
 		return "", err
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return "", err
+	if err := store.Put(
+		context.Background(),
+		configKey,
+		bytes.NewReader(data),
+	); err != nil {
+		return "", fmt.Errorf(
+			"failed to save dataset config: %w",
+			err,
+		)
 	}
 
-	return configPath, nil
+	return configKey, nil
 }
 
 func LoadDatasetConfig(configPath string) (DatasetConfig, error) {
@@ -67,35 +85,6 @@ type ImageConfig struct {
 	FormatConversion   bool   `json:"format_conversion"`
 	OutputFormat       string `json:"output_format,omitempty"`
 	ExtractMetadata    bool   `json:"extract_metadata"`
-}
-
-func SaveImageConfig(
-	config ImageConfig,
-	jobID int64,
-) (string, error) {
-	configPath := fmt.Sprintf(
-		"uploads/%d/config.json",
-		jobID,
-	)
-
-	data, err := json.MarshalIndent(
-		config,
-		"",
-		"  ",
-	)
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.WriteFile(
-		configPath,
-		data,
-		0644,
-	); err != nil {
-		return "", err
-	}
-
-	return configPath, nil
 }
 
 func LoadImageConfig(
@@ -134,12 +123,13 @@ type RouteConstraintConfig struct {
 	MaxStops    *int     `json:"max_stops,omitempty"`
 }
 
-func SaveRouteConfig(
-	config RouteConfig,
+func SaveImageConfig(
+	config ImageConfig,
 	jobID int64,
+	store storage.Storage,
 ) (string, error) {
-	configPath := fmt.Sprintf(
-		"uploads/%d/config.json",
+	configKey := fmt.Sprintf(
+		"jobs/%d/config.json",
 		jobID,
 	)
 
@@ -148,20 +138,55 @@ func SaveRouteConfig(
 		"",
 		"  ",
 	)
-
 	if err != nil {
 		return "", err
 	}
 
-	if err := os.WriteFile(
-		configPath,
-		data,
-		0644,
+	if err := store.Put(
+		context.Background(),
+		configKey,
+		bytes.NewReader(data),
 	); err != nil {
+		return "", fmt.Errorf(
+			"failed to save image config: %w",
+			err,
+		)
+	}
+
+	return configKey, nil
+}
+
+func SaveRouteConfig(
+	config RouteConfig,
+	jobID int64,
+	store storage.Storage,
+) (string, error) {
+	configKey := fmt.Sprintf(
+		"jobs/%d/config.json",
+		jobID,
+	)
+
+	data, err := json.MarshalIndent(
+		config,
+		"",
+		"  ",
+	)
+	if err != nil {
 		return "", err
 	}
 
-	return configPath, nil
+	if err := store.Put(
+		context.Background(),
+		configKey,
+		bytes.NewReader(data),
+	); err != nil {
+		return "", fmt.Errorf(
+			"failed to save route config: %w",
+			err,
+		)
+	}
+
+	return configKey, nil
 }
 
 func LoadRouteConfig(
