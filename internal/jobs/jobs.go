@@ -449,7 +449,22 @@ func persistModelResults(
 			return nil
 		}
 
-		return err
+// failJob records a processing failure and returns the original error.
+func failJob(
+	db *sql.DB,
+	jobID int64,
+	err error,
+) error {
+	if failErr := FailJob(
+		db,
+		jobID,
+		err.Error(),
+	); failErr != nil {
+		log.Printf(
+			"Error marking job %d as failed: %v",
+			jobID,
+			failErr,
+		)
 	}
 
 	key := fmt.Sprintf(
