@@ -42,6 +42,11 @@ The current implementation supports:
 - Verified end-to-end AWS deployment using Amazon S3 object storage
 - Verified dataset, image, and route jobs execute successfully in AWS
 - Verified generated result artifacts, including images and visualizations, are persisted to and served from Amazon S3
+- AWS Secrets Manager integration for RDS database credentials
+- IAM-based access to AWS Secrets Manager from EC2
+- Systemd services for automatic API and worker startup and restart
+- CloudWatch logging for API and worker services
+- CloudWatch monitoring for EC2 CPU, memory, disk usage, and status checks
 
 ### Dataset Processing
 
@@ -194,7 +199,7 @@ The application and worker are separate processes:
 - **PostgreSQL** stores persistent job state and metadata.
 - **Redis** transports job IDs asynchronously between the application and worker.
 - The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
-- The current AWS deployment runs the Go server, Go worker, and Redis on the same EC2 instance, with Amazon RDS providing managed PostgreSQL.
+- The current AWS deployment runs the Go server, Go worker, and Redis on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. RDS master credentials are managed through AWS Secrets Manager and retrieved by the application using the EC2 IAM role. The server and worker run as systemd services with automatic startup and restart, and their logs are collected by the CloudWatch Agent. CloudWatch also collects basic EC2 memory and disk metrics alongside standard EC2 CPU and status-check metrics.
 
 `ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, applies processor timeouts, and dispatches the job to the appropriate processor based on its type. Persistent job inputs and configuration are retrieved through the object-storage abstraction and materialized into a temporary local workspace because the Python processors operate on filesystem paths.
 
@@ -733,7 +738,7 @@ The application also enforces backpressure by limiting the number of outstanding
 
 Processor execution is bounded by a 60-second timeout. A processor that exceeds the timeout is terminated and the job is recorded as failed.
 
-Persistent job inputs, configuration, results, and processor-generated artifacts are accessed through the object-storage abstraction. Local development uses filesystem-backed storage, while AWS deployments use Amazon S3. Workers download persistent inputs into temporary local workspaces before invoking Python processors and upload generated results and artifacts back to object storage after processing.
+Persistent job inputs, configuration, results, and processor-generated artifacts are accessed through the object-storage abstraction. Local development uses filesystem-backed storage, while AWS deployments use Amazon S3. Workers download persistent inputs into temporary local workspaces before invoking Python processors and upload generated results and artifacts back to object storage after processing. AWS deployments retrieve database credentials through AWS Secrets Manager using the EC2 IAM role rather than storing the database password in application configuration.
 
 The system has been tested against:
 
@@ -779,7 +784,7 @@ Additional job types and processors are planned for later iterations.
 
 AWS deployment is now operational for the core application. The current deployment uses an EC2 instance running the Go HTTP server, Go worker, and Redis; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; and IAM-based access from EC2 to S3. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
 
-Remaining AWS deployment work includes production process management, secrets management, logging, monitoring, security hardening, HTTPS, and domain configuration.
+Remaining AWS deployment work includes HTTPS, domain configuration, and further production security hardening.
 
 Planned future work includes:
 
@@ -790,8 +795,7 @@ Planned future work includes:
 - additional job types and processors
 - further worker and processing abstractions where shared behavior warrants them
 - broader integration testing
-- completion of AWS production hardening and deployment automation
-- monitoring and observability
+- additional AWS production hardening and deployment automation
 
 ---
 
