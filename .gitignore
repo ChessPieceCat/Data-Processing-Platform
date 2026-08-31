@@ -8,3 +8,9 @@ __pycache__/
 *.pyc
 server
 worker
+terraform.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
