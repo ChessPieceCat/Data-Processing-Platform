@@ -22,7 +22,7 @@ resource "aws_iam_role" "github_actions" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:ChessPieceCat/Data-Processing-Platform:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub" = "repo:ChessPieceCat@162753184/Data-Processing-Platform@1343320648:ref:refs/heads/main"
           }
         }
       }
