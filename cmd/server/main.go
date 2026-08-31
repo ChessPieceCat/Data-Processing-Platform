@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"text/template"
@@ -9,6 +10,7 @@ import (
 	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 )
 
 func main() {
@@ -25,8 +27,18 @@ func main() {
 		log.Fatal("Error connecting to database:", err)
 	}
 
+	store, err := storage.NewFromEnvironment(
+		context.Background(),
+	)
+	if err != nil {
+		log.Fatal(
+			"Error initializing storage:",
+			err,
+		)
+	}
+
 	// Delete old jobs.
-	if err := jobs.DeleteOldJobs(db, 10); err != nil {
+	if err := jobs.DeleteOldJobs(db, 10, store); err != nil {
 		log.Fatal("Error deleting old jobs:", err)
 	}
 
@@ -117,6 +129,7 @@ func main() {
 		apphttp.DatasetSubmissionHandler(
 			db,
 			redisClient,
+			store,
 		),
 	)
 
@@ -125,6 +138,7 @@ func main() {
 		apphttp.ImageSubmissionHandler(
 			db,
 			redisClient,
+			store,
 		),
 	)
 
@@ -133,6 +147,7 @@ func main() {
 		apphttp.RouteSubmissionHandler(
 			db,
 			redisClient,
+			store,
 		),
 	)
 

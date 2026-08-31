@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -105,51 +106,142 @@ func CreateJob(db *sql.DB, jobType string) (int64, error) {
 func ProcessJob(
 	db *sql.DB,
 	jobID int64,
+	store storage.Storage,
 ) error {
-
-	job, err := GetJob(db, jobID)
+	job, err := GetJob(
+		db,
+		jobID,
+	)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve job %d: %w", jobID, err)
+		return fmt.Errorf(
+			"failed to retrieve job %d: %w",
+			jobID,
+			err,
+		)
 	}
 
 	if job.InputReference == nil {
-		return fmt.Errorf("job %d has no input reference", jobID)
+		return fmt.Errorf(
+			"job %d has no input reference",
+			jobID,
+		)
 	}
-
-	configPath := fmt.Sprintf("uploads/%d/config.json", jobID)
 
 	// Mark the job as processing.
-	if err := startJob(db, jobID); err != nil {
+	if err := startJob(
+		db,
+		jobID,
+	); err != nil {
 		return err
 	}
 
-	// Run the processor
-	resultPath, err := runProcessor(
-		job.Type,
-		*job.InputReference,
-		jobID,
-		configPath,
+	workspace, err := prepareJobWorkspace(
+		context.Background(),
+		store,
+		job,
+	)
+	if err != nil {
+		return failJob(
+			db,
+			jobID,
+			err,
+		)
+	}
+
+	defer os.RemoveAll(
+		workspace.Dir,
 	)
 
+	localResultPath := filepath.Join(
+		workspace.Dir,
+		"results.json",
+	)
+
+	if _, err := runProcessor(
+		job.Type,
+		workspace.InputPath,
+		localResultPath,
+		workspace.ConfigPath,
+	); err != nil {
+		return failJob(
+			db,
+			jobID,
+			err,
+		)
+	}
+
+	resultFile, err := os.Open(
+		localResultPath,
+	)
 	if err != nil {
-		if failErr := FailJob(db, jobID, err.Error()); failErr != nil {
-			log.Printf("Error marking job %d as failed: %v", jobID, failErr)
-		}
+		return failJob(
+			db,
+			jobID,
+			fmt.Errorf(
+				"failed to open processor result: %w",
+				err,
+			),
+		)
+	}
+	defer resultFile.Close()
 
-		return err
+	resultKey := fmt.Sprintf(
+		"jobs/%d/results.json",
+		jobID,
+	)
+
+	if err := store.Put(
+		context.Background(),
+		resultKey,
+		resultFile,
+	); err != nil {
+		return failJob(
+			db,
+			jobID,
+			fmt.Errorf(
+				"failed to save job result: %w",
+				err,
+			),
+		)
 	}
 
-	// Save the result reference.
-	if err := saveResultReference(db, jobID, resultPath); err != nil {
-		if failErr := FailJob(db, jobID, err.Error()); failErr != nil {
-			log.Printf("Error marking job %d as failed: %v", jobID, failErr)
-		}
-
-		return err
+	if err := saveResultReference(
+		db,
+		jobID,
+		resultKey,
+	); err != nil {
+		return failJob(
+			db,
+			jobID,
+			err,
+		)
 	}
 
-	// Mark the job as complete.
-	return completeJob(db, jobID)
+	return completeJob(
+		db,
+		jobID,
+	)
+}
+
+// failJob records a processing failure and returns the original error.
+func failJob(
+	db *sql.DB,
+	jobID int64,
+	err error,
+) error {
+	if failErr := FailJob(
+		db,
+		jobID,
+		err.Error(),
+	); failErr != nil {
+		log.Printf(
+			"Error marking job %d as failed: %v",
+			jobID,
+			failErr,
+		)
+	}
+
+	return err
 }
 
 // findProcessor searches for the processor script for a given job type.
@@ -197,14 +289,9 @@ func findProcessor(processorType string) (string, error) {
 func runProcessor(
 	processorType string,
 	filePath string,
-	jobID int64,
+	resultPath string,
 	configPath string,
 ) (string, error) {
-	resultPath := fmt.Sprintf(
-		"uploads/%d/results.json",
-		jobID,
-	)
-
 	processorPath, err := findProcessor(processorType)
 	if err != nil {
 		return "", err
@@ -498,27 +585,40 @@ func GetCSVColumns(filePath string) ([]string, error) {
 }
 
 // Delete a job and its associated directory.
-func DeleteJob(db *sql.DB, jobID int64) error {
-	_, err := db.Exec(
+func DeleteJob(
+	db *sql.DB,
+	jobID int64,
+	store storage.Storage,
+) error {
+	if err := store.DeletePrefix(
+		context.Background(),
+		fmt.Sprintf(
+			"jobs/%d/",
+			jobID,
+		),
+	); err != nil {
+		return fmt.Errorf(
+			"failed to delete job objects: %w",
+			err,
+		)
+	}
+
+	if _, err := db.Exec(
 		`DELETE FROM jobs WHERE id = $1`,
 		jobID,
-	)
-
-	if err != nil {
+	); err != nil {
 		return err
 	}
 
-	// Delete the associated directory for the job.
-	jobDir := fmt.Sprintf("uploads/%d", jobID)
-	if err := os.RemoveAll(jobDir); err != nil {
-		return fmt.Errorf("failed to delete job directory %s: %w", jobDir, err)
-	}
+	log.Printf(
+		"Job %d deleted",
+		jobID,
+	)
 
-	log.Printf("Job %d deleted", jobID)
 	return nil
 }
 
-func DeleteOldJobs(db *sql.DB, keep int) error {
+func DeleteOldJobs(db *sql.DB, keep int, store storage.Storage) error {
 	rows, err := db.Query(`
         SELECT id
         FROM jobs
@@ -547,7 +647,7 @@ func DeleteOldJobs(db *sql.DB, keep int) error {
 	}
 
 	for _, jobID := range oldJobIDs {
-		if err := DeleteJob(db, jobID); err != nil {
+		if err := DeleteJob(db, jobID, store); err != nil {
 			return err
 		}
 	}
@@ -573,4 +673,214 @@ func EnqueueJob(redisClient *redis.Client, jobID int64) error {
 	}
 
 	return nil
+}
+
+func prepareJobWorkspace(
+	ctx context.Context,
+	store storage.Storage,
+	job *Job,
+) (*JobWorkspace, error) {
+	if job.InputReference == nil {
+		return nil, fmt.Errorf(
+			"job %d has no input reference",
+			job.ID,
+		)
+	}
+
+	workspace, err := os.MkdirTemp(
+		"",
+		fmt.Sprintf("job-%d-", job.ID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to create job workspace: %w",
+			err,
+		)
+	}
+
+	cleanup := func() {
+		_ = os.RemoveAll(workspace)
+	}
+
+	inputReader, err := store.Get(
+		ctx,
+		*job.InputReference,
+	)
+	if err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to retrieve job input: %w",
+			err,
+		)
+	}
+	defer inputReader.Close()
+
+	inputPath := filepath.Join(
+		workspace,
+		filepath.Base(*job.InputReference),
+	)
+
+	inputFile, err := os.Create(inputPath)
+	if err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to create local input file: %w",
+			err,
+		)
+	}
+
+	if _, err := io.Copy(
+		inputFile,
+		inputReader,
+	); err != nil {
+		inputFile.Close()
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to download job input: %w",
+			err,
+		)
+	}
+
+	if err := inputFile.Close(); err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to close local input file: %w",
+			err,
+		)
+	}
+
+	configKey := fmt.Sprintf(
+		"jobs/%d/config.json",
+		job.ID,
+	)
+
+	configReader, err := store.Get(
+		ctx,
+		configKey,
+	)
+	if err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to retrieve job config: %w",
+			err,
+		)
+	}
+	defer configReader.Close()
+
+	configPath := filepath.Join(
+		workspace,
+		"config.json",
+	)
+
+	configFile, err := os.Create(configPath)
+	if err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to create local config file: %w",
+			err,
+		)
+	}
+
+	if _, err := io.Copy(
+		configFile,
+		configReader,
+	); err != nil {
+		configFile.Close()
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to download job config: %w",
+			err,
+		)
+	}
+
+	if err := configFile.Close(); err != nil {
+		cleanup()
+
+		return nil, fmt.Errorf(
+			"failed to close local config file: %w",
+			err,
+		)
+	}
+
+	workspaceInfo := &JobWorkspace{
+		Dir:        workspace,
+		InputPath:  inputPath,
+		ConfigPath: configPath,
+	}
+
+	if job.Type == "route" {
+		distanceKey := fmt.Sprintf(
+			"jobs/%d/distances.csv",
+			job.ID,
+		)
+
+		distanceReader, err := store.Get(
+			ctx,
+			distanceKey,
+		)
+		if err != nil {
+			cleanup()
+
+			return nil, fmt.Errorf(
+				"failed to retrieve route distance table: %w",
+				err,
+			)
+		}
+		defer distanceReader.Close()
+
+		distancePath := filepath.Join(
+			workspace,
+			"distances.csv",
+		)
+
+		distanceFile, err := os.Create(distancePath)
+		if err != nil {
+			cleanup()
+
+			return nil, fmt.Errorf(
+				"failed to create local distance table: %w",
+				err,
+			)
+		}
+
+		if _, err := io.Copy(
+			distanceFile,
+			distanceReader,
+		); err != nil {
+			distanceFile.Close()
+			cleanup()
+
+			return nil, fmt.Errorf(
+				"failed to download route distance table: %w",
+				err,
+			)
+		}
+
+		if err := distanceFile.Close(); err != nil {
+			cleanup()
+
+			return nil, fmt.Errorf(
+				"failed to close local distance table: %w",
+				err,
+			)
+		}
+
+		workspaceInfo.DistancePath = distancePath
+	}
+
+	return workspaceInfo, nil
+}
+
+type JobWorkspace struct {
+	Dir          string
+	InputPath    string
+	DistancePath string
+	ConfigPath   string
 }

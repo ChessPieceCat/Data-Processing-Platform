@@ -1,15 +1,20 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 )
 
 func TestSaveDatasetConfig(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 	jobID := int64(12345)
 
 	config := DatasetConfig{
@@ -30,23 +35,11 @@ func TestSaveDatasetConfig(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join("uploads", "12345")
-
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		t.Fatalf(
-			"failed to create test job directory: %v",
-			err,
-		)
-	}
-
-	t.Cleanup(func() {
-		os.RemoveAll(jobDirectory)
-	})
-
-	path, err := SaveDatasetConfig(config, jobID)
+	path, err := SaveDatasetConfig(
+		config,
+		jobID,
+		store,
+	)
 	if err != nil {
 		t.Fatalf(
 			"SaveDatasetConfig failed: %v",
@@ -54,10 +47,7 @@ func TestSaveDatasetConfig(t *testing.T) {
 		)
 	}
 
-	expectedPath := filepath.Join(
-		jobDirectory,
-		"config.json",
-	)
+	expectedPath := "jobs/12345/config.json"
 
 	if path != expectedPath {
 		t.Fatalf(
@@ -67,7 +57,19 @@ func TestSaveDatasetConfig(t *testing.T) {
 		)
 	}
 
-	data, err := os.ReadFile(path)
+	reader, err := store.Get(
+		context.Background(),
+		path,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to get saved config: %v",
+			err,
+		)
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf(
 			"failed to read saved config: %v",
@@ -147,7 +149,9 @@ func TestLoadDatasetConfig(t *testing.T) {
 		)
 	}
 
-	actual, err := LoadDatasetConfig(configPath)
+	actual, err := LoadDatasetConfig(
+		configPath,
+	)
 	if err != nil {
 		t.Fatalf(
 			"LoadDatasetConfig failed: %v",
@@ -168,6 +172,7 @@ func TestLoadDatasetConfig(t *testing.T) {
 }
 
 func TestSaveAndLoadDatasetConfig(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 	jobID := int64(12346)
 
 	original := DatasetConfig{
@@ -188,28 +193,10 @@ func TestSaveAndLoadDatasetConfig(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join(
-		"uploads",
-		"12346",
-	)
-
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		t.Fatalf(
-			"failed to create test job directory: %v",
-			err,
-		)
-	}
-
-	t.Cleanup(func() {
-		os.RemoveAll(jobDirectory)
-	})
-
-	configPath, err := SaveDatasetConfig(
+	configKey, err := SaveDatasetConfig(
 		original,
 		jobID,
+		store,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -218,7 +205,48 @@ func TestSaveAndLoadDatasetConfig(t *testing.T) {
 		)
 	}
 
-	loaded, err := LoadDatasetConfig(configPath)
+	reader, err := store.Get(
+		context.Background(),
+		configKey,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to get saved config: %v",
+			err,
+		)
+	}
+
+	data, err := io.ReadAll(reader)
+	reader.Close()
+
+	if err != nil {
+		t.Fatalf(
+			"failed to read saved config: %v",
+			err,
+		)
+	}
+
+	tempDir := t.TempDir()
+
+	configPath := filepath.Join(
+		tempDir,
+		"config.json",
+	)
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to create temporary config file: %v",
+			err,
+		)
+	}
+
+	loaded, err := LoadDatasetConfig(
+		configPath,
+	)
 	if err != nil {
 		t.Fatalf(
 			"LoadDatasetConfig failed: %v",
@@ -369,6 +397,7 @@ func TestDatasetConfigOptionalFeatures(t *testing.T) {
 }
 
 func TestSaveRouteConfig(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 	jobID := int64(12347)
 
 	maxDistance := 140.0
@@ -386,28 +415,10 @@ func TestSaveRouteConfig(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join(
-		"uploads",
-		"12347",
-	)
-
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		t.Fatalf(
-			"failed to create test job directory: %v",
-			err,
-		)
-	}
-
-	t.Cleanup(func() {
-		os.RemoveAll(jobDirectory)
-	})
-
 	path, err := SaveRouteConfig(
 		config,
 		jobID,
+		store,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -416,10 +427,7 @@ func TestSaveRouteConfig(t *testing.T) {
 		)
 	}
 
-	expectedPath := filepath.Join(
-		jobDirectory,
-		"config.json",
-	)
+	expectedPath := "jobs/12347/config.json"
 
 	if path != expectedPath {
 		t.Fatalf(
@@ -429,10 +437,22 @@ func TestSaveRouteConfig(t *testing.T) {
 		)
 	}
 
-	data, err := os.ReadFile(path)
+	reader, err := store.Get(
+		context.Background(),
+		path,
+	)
 	if err != nil {
 		t.Fatalf(
-			"failed to read saved route config: %v",
+			"failed to get saved config: %v",
+			err,
+		)
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf(
+			"failed to read saved config: %v",
 			err,
 		)
 	}
@@ -507,7 +527,9 @@ func TestLoadRouteConfig(t *testing.T) {
 		)
 	}
 
-	actual, err := LoadRouteConfig(configPath)
+	actual, err := LoadRouteConfig(
+		configPath,
+	)
 	if err != nil {
 		t.Fatalf(
 			"LoadRouteConfig failed: %v",
@@ -528,6 +550,7 @@ func TestLoadRouteConfig(t *testing.T) {
 }
 
 func TestSaveAndLoadRouteConfig(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 	jobID := int64(12348)
 
 	maxDistance := 140.0
@@ -545,28 +568,10 @@ func TestSaveAndLoadRouteConfig(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join(
-		"uploads",
-		"12348",
-	)
-
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		t.Fatalf(
-			"failed to create test job directory: %v",
-			err,
-		)
-	}
-
-	t.Cleanup(func() {
-		os.RemoveAll(jobDirectory)
-	})
-
-	configPath, err := SaveRouteConfig(
+	configKey, err := SaveRouteConfig(
 		original,
 		jobID,
+		store,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -575,7 +580,48 @@ func TestSaveAndLoadRouteConfig(t *testing.T) {
 		)
 	}
 
-	loaded, err := LoadRouteConfig(configPath)
+	reader, err := store.Get(
+		context.Background(),
+		configKey,
+	)
+	if err != nil {
+		t.Fatalf(
+			"failed to get saved config: %v",
+			err,
+		)
+	}
+
+	data, err := io.ReadAll(reader)
+	reader.Close()
+
+	if err != nil {
+		t.Fatalf(
+			"failed to read saved config: %v",
+			err,
+		)
+	}
+
+	tempDir := t.TempDir()
+
+	configPath := filepath.Join(
+		tempDir,
+		"config.json",
+	)
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to create temporary config file: %v",
+			err,
+		)
+	}
+
+	loaded, err := LoadRouteConfig(
+		configPath,
+	)
 	if err != nil {
 		t.Fatalf(
 			"LoadRouteConfig failed: %v",
@@ -596,6 +642,7 @@ func TestSaveAndLoadRouteConfig(t *testing.T) {
 }
 
 func TestSaveAndLoadRouteConfigWithoutOptionalFields(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 	jobID := int64(12349)
 
 	original := RouteConfig{
@@ -605,28 +652,10 @@ func TestSaveAndLoadRouteConfigWithoutOptionalFields(t *testing.T) {
 		},
 	}
 
-	jobDirectory := filepath.Join(
-		"uploads",
-		"12349",
-	)
-
-	if err := os.MkdirAll(
-		jobDirectory,
-		0755,
-	); err != nil {
-		t.Fatalf(
-			"failed to create test job directory: %v",
-			err,
-		)
-	}
-
-	t.Cleanup(func() {
-		os.RemoveAll(jobDirectory)
-	})
-
-	configPath, err := SaveRouteConfig(
+	configKey, err := SaveRouteConfig(
 		original,
 		jobID,
+		store,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -635,10 +664,23 @@ func TestSaveAndLoadRouteConfigWithoutOptionalFields(t *testing.T) {
 		)
 	}
 
-	data, err := os.ReadFile(configPath)
+	reader, err := store.Get(
+		context.Background(),
+		configKey,
+	)
 	if err != nil {
 		t.Fatalf(
-			"failed to read route config: %v",
+			"failed to get saved config: %v",
+			err,
+		)
+	}
+
+	data, err := io.ReadAll(reader)
+	reader.Close()
+
+	if err != nil {
+		t.Fatalf(
+			"failed to read saved config: %v",
 			err,
 		)
 	}
@@ -672,7 +714,27 @@ func TestSaveAndLoadRouteConfigWithoutOptionalFields(t *testing.T) {
 		)
 	}
 
-	loaded, err := LoadRouteConfig(configPath)
+	tempDir := t.TempDir()
+
+	configPath := filepath.Join(
+		tempDir,
+		"config.json",
+	)
+
+	if err := os.WriteFile(
+		configPath,
+		data,
+		0644,
+	); err != nil {
+		t.Fatalf(
+			"failed to create temporary config file: %v",
+			err,
+		)
+	}
+
+	loaded, err := LoadRouteConfig(
+		configPath,
+	)
 	if err != nil {
 		t.Fatalf(
 			"LoadRouteConfig failed: %v",

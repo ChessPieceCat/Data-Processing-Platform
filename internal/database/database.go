@@ -124,12 +124,18 @@ func getDatabaseURL() string {
 		"data_platform",
 	)
 
+	sslMode := getEnv(
+		"DB_SSLMODE",
+		"verify-full",
+	)
+
 	return fmt.Sprintf(
-		"postgresql://%s:%s@%s:%s/%s?sslmode=disable",
+		"postgresql://%s:%s@%s:%s/%s?sslmode=%s",
 		user,
 		password,
 		host,
 		port,
 		name,
+		sslMode,
 	)
 }
