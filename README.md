@@ -21,7 +21,7 @@ The current implementation supports:
 - Generic job processing and dispatch based on job type
 - Storage abstraction supporting local filesystem and Amazon S3 backends
 - Environment-based selection between local and S3 object storage
-- Shared job input/result storage between the application and worker
+- Shared persistent job input, configuration, result, and artifact storage between the application and worker
 - Job lifecycle tracking:
 
   - queued
@@ -39,7 +39,9 @@ The current implementation supports:
 - Processor timeout handling
 - Configurable PostgreSQL, Redis, and object-storage settings
 - Worker throughput and latency benchmarking
-- Verified local application operation against Amazon S3 object storage
+- Verified end-to-end AWS deployment using Amazon S3 object storage
+- Verified dataset, image, and route jobs execute successfully in AWS
+- Verified generated result artifacts, including images and visualizations, are persisted to and served from Amazon S3
 
 ### Dataset Processing
 
@@ -136,55 +138,53 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 
 The application uses Go for the web server, job management, job submission, Redis queueing, worker execution, and storage orchestration; PostgreSQL for persistent job state; Redis Streams for asynchronous delivery; an object-storage abstraction backed by either the local filesystem or Amazon S3; and Python for domain-specific processing.
 
-
 ```text
+Local Development
+
 Browser
    |
    v
 Go HTTP server
    |
    +---- PostgreSQL
-   |        |
-   |        +--- job state
-   |        +--- job metadata
    |
-   +---- Object Storage
-   |        |
-   |        +--- Local filesystem
-   |        |
-   |        +--- Amazon S3
+   +---- Redis
    |
-   +---- Redis Stream
-             |
-             v
-       Redis Consumer Group
-             |
-       +-----+-----+-----+
-       |           |     |
-       v           v     v
-    Worker 1    Worker 2 Worker 3
-       |           |       |
-       +-----+-----+-------+
-             |
-             v
-         ProcessJob
-             |
-       +-----+-----+-----+
-       |           |     |
-       v           v     v
-    Dataset      Image  Route
-    processor    processor processor
-       |           |       |
-       v           v       v
-     Python      Python  Python
-     dataset      image   route
-    processor   processor processor
-       |           |
-       |           +--- Pillow
-       |
-       +--- pandas
-       +--- scikit-learn
-       +--- matplotlib / seaborn
+   +---- Local filesystem storage
+   |
+   v
+Go worker
+   |
+   v
+ProcessJob
+   |
+   +---- Dataset processor
+   +---- Image processor
+   +---- Route processor
+
+
+AWS Deployment
+
+Browser
+   |
+   v
+EC2 Go HTTP server
+   |
+   +---- Amazon RDS PostgreSQL
+   |
+   +---- Redis on EC2
+   |
+   +---- Amazon S3
+   |
+   v
+EC2 Go worker
+   |
+   v
+ProcessJob
+   |
+   +---- Dataset processor
+   +---- Image processor
+   +---- Route processor
 ```
 
 The application and worker are separate processes:
@@ -193,11 +193,12 @@ The application and worker are separate processes:
 - The **Go worker** consumes Redis Stream messages, recovers pending jobs on startup, and invokes `ProcessJob`.
 - **PostgreSQL** stores persistent job state and metadata.
 - **Redis** transports job IDs asynchronously between the application and worker.
-- The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and other job artifacts. Local development uses the filesystem-backed storage implementation, while AWS deployment uses Amazon S3.
+- The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
+- The current AWS deployment runs the Go server, Go worker, and Redis on the same EC2 instance, with Amazon RDS providing managed PostgreSQL.
 
 `ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, applies processor timeouts, and dispatches the job to the appropriate processor based on its type. Persistent job inputs and configuration are retrieved through the object-storage abstraction and materialized into a temporary local workspace because the Python processors operate on filesystem paths.
 
-After processing, generated results are uploaded back through the object-storage abstraction and the persistent result reference stored in PostgreSQL points to the storage key rather than a local filesystem path.
+After processing, generated results and processor-specific artifacts are uploaded back through the object-storage abstraction. Result references stored in PostgreSQL and processor result JSON files point to persistent storage keys rather than temporary local filesystem paths.
 
 Job-specific processors are responsible for performing domain-specific work and producing result artifacts. The shared job system does not need to be rewritten when another processor is added; a processor can be added for a new job type while preserving the common Redis and worker infrastructure.
 
@@ -347,14 +348,16 @@ docs/
 
 For local development outside Docker, you need:
 
-* Go 1.26.5
-* Python 3.12
-* PostgreSQL
-* Redis
-* Python packages listed in:
+- Go 1.26.5
+- Python 3.12 or Python 3.14
+- PostgreSQL
+- Redis
+- Python packages listed in:
 
-  * `processors/dataset/requirements.txt`
-  * `processors/image/requirements.txt`
+  - `processors/dataset/requirements.txt`
+  - `processors/image/requirements.txt`
+
+The dataset, image, and route processor test suites have been verified with Python 3.12 in CI and Python 3.14.4 on ARM64.
 
 Amazon S3 is optional for local development. The application defaults to local filesystem storage, while S3 can be selected through `STORAGE_BACKEND=s3` and `S3_BUCKET`. AWS credentials are provided through the standard AWS SDK credential chain when using S3.
 
@@ -593,7 +596,9 @@ jobs/<job-id>/
 ├── config.json
 ├── results.json
 ├── results_model_results.json
-└── visualization artifacts
+├── results_feature_distributions.png
+├── results_correlation_heatmap.png
+└── results_actual_vs_predicted.png
 ```
 
 The dataset results page displays:
@@ -613,12 +618,14 @@ A typical completed image job may contain:
 ```text
 jobs/<job-id>/
 
-├── input.jpg
+├── input.<ext>
 ├── config.json
-├── processed.jpg
+├── processed.<ext>
 ├── results.json
 └── metadata.json
 ```
+
+The processed image extension depends on the selected output format. The original image, processed image, and metadata are stored as persistent object-storage artifacts and can be served or downloaded through the application.
 
 The image results page displays:
 
@@ -726,7 +733,7 @@ The application also enforces backpressure by limiting the number of outstanding
 
 Processor execution is bounded by a 60-second timeout. A processor that exceeds the timeout is terminated and the job is recorded as failed.
 
-Persistent job inputs, configuration, and results are accessed through the object-storage abstraction. Local development uses filesystem-backed storage, while AWS deployments use Amazon S3. Workers download persistent inputs into temporary local workspaces before invoking Python processors and upload generated results back to object storage after processing.
+Persistent job inputs, configuration, results, and processor-generated artifacts are accessed through the object-storage abstraction. Local development uses filesystem-backed storage, while AWS deployments use Amazon S3. Workers download persistent inputs into temporary local workspaces before invoking Python processors and upload generated results and artifacts back to object storage after processing.
 
 The system has been tested against:
 
@@ -770,7 +777,9 @@ Current job types:
 
 Additional job types and processors are planned for later iterations.
 
-Deployment work has begun with an AWS-compatible object-storage abstraction and successful S3-backed execution of dataset, image, and route jobs. AWS deployment infrastructure is being developed incrementally, beginning with S3 and managed PostgreSQL before completing compute deployment, networking, IAM, secrets, logging, monitoring, and production-facing HTTPS configuration.
+AWS deployment is now operational for the core application. The current deployment uses an EC2 instance running the Go HTTP server, Go worker, and Redis; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; and IAM-based access from EC2 to S3. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+
+Remaining AWS deployment work includes production process management, secrets management, logging, monitoring, security hardening, HTTPS, and domain configuration.
 
 Planned future work includes:
 
@@ -781,9 +790,8 @@ Planned future work includes:
 - additional job types and processors
 - further worker and processing abstractions where shared behavior warrants them
 - broader integration testing
-- completion of AWS deployment and infrastructure
+- completion of AWS production hardening and deployment automation
 - monitoring and observability
-- additional security hardening
 
 ---
 

@@ -797,70 +797,54 @@ func TestGetImageConfig(t *testing.T) {
 // into the expected Go structure.
 
 func TestLoadDatasetResults(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 
-	tempDir := t.TempDir()
-
-	resultPath := filepath.Join(tempDir, "results.json")
+	key := "results.json"
 
 	data := map[string]interface{}{
-
-		"num_rows": 10,
-
+		"num_rows":    10,
 		"num_columns": 2,
-
 		"column_names": []string{
-
 			"temperature",
-
 			"humidity",
 		},
 	}
 
 	fileData, err := json.Marshal(data)
-
 	if err != nil {
-
 		t.Fatalf("failed to marshal test results: %v", err)
-
 	}
 
-	if err := os.WriteFile(resultPath, fileData, 0644); err != nil {
-
-		t.Fatalf("failed to write test results: %v", err)
-
+	if err := store.Put(
+		context.Background(),
+		key,
+		bytes.NewReader(fileData),
+	); err != nil {
+		t.Fatalf("failed to store test results: %v", err)
 	}
 
-	results, err := loadDatasetResults(resultPath)
-
+	results, err := loadDatasetResults(
+		store,
+		key,
+	)
 	if err != nil {
-
 		t.Fatalf("unexpected error: %v", err)
-
 	}
 
 	if results.NumRows != 10 {
-
 		t.Fatalf("expected 10 rows, got %d", results.NumRows)
-
 	}
 
 	if results.NumColumns != 2 {
-
 		t.Fatalf("expected 2 columns, got %d", results.NumColumns)
-
 	}
 
 	if len(results.ColumnNames) != 2 {
-
 		t.Fatalf(
-
 			"expected 2 column names, got %d",
-
 			len(results.ColumnNames),
 		)
-
 	}
-
 }
 
 // TestLoadDatasetResultsMissingFile verifies missing result files return
@@ -868,18 +852,16 @@ func TestLoadDatasetResults(t *testing.T) {
 // an error.
 
 func TestLoadDatasetResultsMissingFile(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 
 	_, err := loadDatasetResults(
-
-		filepath.Join(t.TempDir(), "missing.json"),
+		store,
+		"missing.json",
 	)
 
 	if err == nil {
-
 		t.Fatal("expected error for missing results file")
-
 	}
-
 }
 
 // TestLoadModelResultsMissingFile verifies that a missing model-results
@@ -887,23 +869,21 @@ func TestLoadDatasetResultsMissingFile(t *testing.T) {
 // file means no model was requested.
 
 func TestLoadModelResultsMissingFile(t *testing.T) {
+	store := storage.NewLocalStorage(t.TempDir())
 
 	jobID := int64(999999)
 
-	results, err := loadModelResults(jobID)
-
+	results, err := loadModelResults(
+		store,
+		jobID,
+	)
 	if err != nil {
-
 		t.Fatalf("unexpected error: %v", err)
-
 	}
 
 	if results != nil {
-
 		t.Fatal("expected nil model results for missing file")
-
 	}
-
 }
 
 // TestIndexHandlerRejectsNonRoot verifies that IndexHandler returns 404
@@ -941,7 +921,7 @@ func TestIndexHandlerRejectsNonRoot(t *testing.T) {
 
 func TestDownloadResultsHandlerRejectsWrongMethod(t *testing.T) {
 
-	handler := DownloadResultsHandler(nil)
+	handler := DownloadResultsHandler(nil, nil)
 
 	req := httptest.NewRequest(
 
@@ -977,7 +957,7 @@ func TestDownloadResultsHandlerRejectsWrongMethod(t *testing.T) {
 
 func TestDownloadModelHandlerRejectsWrongMethod(t *testing.T) {
 
-	handler := DownloadModelHandler(nil)
+	handler := DownloadModelHandler(nil, nil)
 
 	req := httptest.NewRequest(
 
@@ -1081,7 +1061,7 @@ func TestDatasetInspectionHandlerRequiresCSV(t *testing.T) {
 
 func TestVisualizationHandlerRequiresID(t *testing.T) {
 
-	handler := VisualizationHandler(nil)
+	handler := VisualizationHandler(nil, nil)
 
 	req := httptest.NewRequest(
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -170,45 +171,13 @@ func ProcessJob(
 		)
 	}
 
-	resultFile, err := os.Open(
-		localResultPath,
-	)
-	if err != nil {
-		return failJob(
-			db,
-			jobID,
-			fmt.Errorf(
-				"failed to open processor result: %w",
-				err,
-			),
-		)
-	}
-	defer resultFile.Close()
-
-	resultKey := fmt.Sprintf(
-		"jobs/%d/results.json",
-		jobID,
-	)
-
-	if err := store.Put(
+	if err := persistJobArtifacts(
 		context.Background(),
-		resultKey,
-		resultFile,
-	); err != nil {
-		return failJob(
-			db,
-			jobID,
-			fmt.Errorf(
-				"failed to save job result: %w",
-				err,
-			),
-		)
-	}
-
-	if err := saveResultReference(
 		db,
-		jobID,
-		resultKey,
+		store,
+		job,
+		workspace,
+		localResultPath,
 	); err != nil {
 		return failJob(
 			db,
@@ -221,6 +190,286 @@ func ProcessJob(
 		db,
 		jobID,
 	)
+}
+
+func persistJobArtifacts(
+	ctx context.Context,
+	db *sql.DB,
+	store storage.Storage,
+	job *Job,
+	workspace *JobWorkspace,
+	localResultPath string,
+) error {
+	resultData, err := os.ReadFile(localResultPath)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to read processor result: %w",
+			err,
+		)
+	}
+
+	var result map[string]interface{}
+
+	if err := json.Unmarshal(
+		resultData,
+		&result,
+	); err != nil {
+		return fmt.Errorf(
+			"failed to decode processor result: %w",
+			err,
+		)
+	}
+
+	switch job.Type {
+	case "image":
+		if err := persistImageArtifacts(
+			ctx,
+			store,
+			job.ID,
+			workspace,
+			result,
+		); err != nil {
+			return err
+		}
+
+	case "dataset":
+		if err := persistDatasetArtifacts(
+			ctx,
+			store,
+			job.ID,
+			workspace,
+			result,
+		); err != nil {
+			return err
+		}
+	}
+
+	updatedResult, err := json.MarshalIndent(
+		result,
+		"",
+		"  ",
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to encode updated processor result: %w",
+			err,
+		)
+	}
+
+	if err := os.WriteFile(
+		localResultPath,
+		updatedResult,
+		0644,
+	); err != nil {
+		return fmt.Errorf(
+			"failed to write updated processor result: %w",
+			err,
+		)
+	}
+
+	resultFile, err := os.Open(localResultPath)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to reopen processor result: %w",
+			err,
+		)
+	}
+	defer resultFile.Close()
+
+	resultKey := fmt.Sprintf(
+		"jobs/%d/results.json",
+		job.ID,
+	)
+
+	if err := store.Put(
+		ctx,
+		resultKey,
+		resultFile,
+	); err != nil {
+		return fmt.Errorf(
+			"failed to store job result: %w",
+			err,
+		)
+	}
+
+	if err := saveResultReference(
+		db,
+		job.ID,
+		resultKey,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func uploadLocalFile(
+	ctx context.Context,
+	store storage.Storage,
+	localPath string,
+	key string,
+) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if err := store.Put(
+		ctx,
+		key,
+		file,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func persistImageArtifacts(
+	ctx context.Context,
+	store storage.Storage,
+	jobID int64,
+	workspace *JobWorkspace,
+	result map[string]interface{},
+) error {
+	if processedPath, ok := result["processed_path"].(string); ok {
+		key := fmt.Sprintf(
+			"jobs/%d/%s",
+			jobID,
+			filepath.Base(processedPath),
+		)
+
+		if err := uploadLocalFile(
+			ctx,
+			store,
+			processedPath,
+			key,
+		); err != nil {
+			return fmt.Errorf(
+				"failed to store processed image: %w",
+				err,
+			)
+		}
+
+		result["processed_path"] = key
+	}
+
+	if metadataPath, ok := result["metadata_reference"].(string); ok &&
+		metadataPath != "" {
+		key := fmt.Sprintf(
+			"jobs/%d/metadata.json",
+			jobID,
+		)
+
+		if err := uploadLocalFile(
+			ctx,
+			store,
+			metadataPath,
+			key,
+		); err != nil {
+			return fmt.Errorf(
+				"failed to store image metadata: %w",
+				err,
+			)
+		}
+
+		result["metadata_reference"] = key
+	}
+
+	// The original image is already stored persistently.
+	result["original_path"] = fmt.Sprintf(
+		"jobs/%d/%s",
+		jobID,
+		filepath.Base(workspace.InputPath),
+	)
+
+	return nil
+}
+
+func persistDatasetArtifacts(
+	ctx context.Context,
+	store storage.Storage,
+	jobID int64,
+	workspace *JobWorkspace,
+	result map[string]interface{},
+) error {
+	visualizations, ok := result["visualizations"].(map[string]interface{})
+	if ok {
+		for name, value := range visualizations {
+			path, ok := value.(string)
+			if !ok || path == "" {
+				continue
+			}
+
+			key := fmt.Sprintf(
+				"jobs/%d/%s",
+				jobID,
+				filepath.Base(path),
+			)
+
+			if err := uploadLocalFile(
+				ctx,
+				store,
+				path,
+				key,
+			); err != nil {
+				return fmt.Errorf(
+					"failed to store visualization %q: %w",
+					name,
+					err,
+				)
+			}
+
+			visualizations[name] = key
+		}
+	}
+
+	return persistModelResults(
+		ctx,
+		store,
+		jobID,
+		workspace,
+	)
+}
+
+func persistModelResults(
+	ctx context.Context,
+	store storage.Storage,
+	jobID int64,
+	workspace *JobWorkspace,
+) error {
+	path := filepath.Join(
+		workspace.Dir,
+		"results_model_results.json",
+	)
+
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		return err
+	}
+
+	key := fmt.Sprintf(
+		"jobs/%d/results_model_results.json",
+		jobID,
+	)
+
+	if err := uploadLocalFile(
+		ctx,
+		store,
+		path,
+		key,
+	); err != nil {
+		return fmt.Errorf(
+			"failed to store model results: %w",
+			err,
+		)
+	}
+
+	return nil
 }
 
 // failJob records a processing failure and returns the original error.
