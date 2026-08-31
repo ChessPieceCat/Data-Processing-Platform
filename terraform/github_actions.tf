@@ -123,7 +123,7 @@ resource "aws_iam_role" "github_terraform_plan" {
         Condition = {
           StringEquals = {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-            "token.actions.githubusercontent.com:sub" = "repo:ChessPieceCat/Data-Processing-Platform:pull_request"
+            "token.actions.githubusercontent.com:sub" = "repo:ChessPieceCat@162753184/Data-Processing-Platform@1343320648:pull_request"
           }
         }
       }
