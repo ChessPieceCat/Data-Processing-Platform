@@ -47,6 +47,11 @@ The current implementation supports:
 - Systemd services for automatic API and worker startup and restart
 - CloudWatch logging for API and worker services
 - CloudWatch monitoring for EC2 CPU, memory, disk usage, and status checks
+- Terraform infrastructure as code for AWS resources
+- Terraform-managed AWS provider, networking references, security groups, EC2, RDS, S3, IAM, and CloudWatch resources
+- Terraform remote state stored in Amazon S3 with state locking
+- Existing AWS infrastructure imported and reconciled into Terraform state
+- Terraform lifecycle validation using a disposable resource creation and destruction test
 
 ### Dataset Processing
 
@@ -132,7 +137,7 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 
 - Automatic cleanup of older jobs while retaining the most recent jobs
 - Automated Go and Python tests
-- GitHub Actions CI for Go tests, all Python processor tests, and both Go binaries
+- GitHub Actions CI for Terraform validation, Go tests, all Python processor tests, and both Go binaries
 - Three worker replicas by default in Docker Compose
 - Configurable worker scaling through Docker Compose
 - Queue backpressure with a maximum of 100 outstanding queued or processing jobs
@@ -201,6 +206,8 @@ The application and worker are separate processes:
 - The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
 - The current AWS deployment runs the Go server, Go worker, and Redis on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. RDS master credentials are managed through AWS Secrets Manager and retrieved by the application using the EC2 IAM role. The server and worker run as systemd services with automatic startup and restart, and their logs are collected by the CloudWatch Agent. CloudWatch also collects basic EC2 memory and disk metrics alongside standard EC2 CPU and status-check metrics.
 
+AWS infrastructure is managed through Terraform. Terraform manages the application security groups, EC2 instance, RDS instance, application S3 bucket, IAM role and permissions, CloudWatch log groups, CloudWatch alarms, and CloudWatch dashboard. Terraform uses an Amazon S3 backend for remote state with native state locking and imports the existing AWS infrastructure into Terraform state rather than creating duplicate resources.
+
 `ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, applies processor timeouts, and dispatches the job to the appropriate processor based on its type. Persistent job inputs and configuration are retrieved through the object-storage abstraction and materialized into a temporary local workspace because the Python processors operate on filesystem paths.
 
 After processing, generated results and processor-specific artifacts are uploaded back through the object-storage abstraction. Result references stored in PostgreSQL and processor result JSON files point to persistent storage keys rather than temporary local filesystem paths.
@@ -227,32 +234,52 @@ Persistent job inputs, configuration, results, and other job artifacts are store
 
 ```text
 cmd/server/
+
     Go HTTP server entry point
 
 cmd/worker/
+
     Go worker entry point
 
 internal/database/
+
     PostgreSQL connection and embedded migrations
 
 internal/http/
+
     HTTP handlers, result models, and templates
 
 internal/jobs/
+
     Job lifecycle, job dispatching, processor execution,
+
     processing configuration, retries, and timeouts
 
 internal/redis/
+
     Redis connection and Stream configuration
 
 internal/worker/
-Redis worker pool, consumer-group processing,
-pending-job recovery, graceful shutdown,
-concurrency tests, and performance benchmarks
+
+    Redis worker pool, consumer-group processing,
+
+    pending-job recovery, graceful shutdown,
+
+    concurrency tests, and performance benchmarks
 
 internal/storage/
+
     Object-storage abstraction and implementations
 
+terraform/
+
+    AWS infrastructure as code
+
+    Provider and backend configuration
+
+    EC2, RDS, S3, IAM, security groups, and CloudWatch resources
+
+    Terraform variables and outputs
 ```
     storage.go
         Storage interface
@@ -782,7 +809,9 @@ Current job types:
 
 Additional job types and processors are planned for later iterations.
 
-AWS deployment is now operational for the core application. The current deployment uses an EC2 instance running the Go HTTP server, Go worker, and Redis; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; and IAM-based access from EC2 to S3. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The current deployment uses an EC2 instance running the Go HTTP server, Go worker, and Redis; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+
+Terraform uses remote state stored in Amazon S3 and manages the deployed AWS infrastructure. Existing infrastructure has been imported into Terraform state and verified with clean plans. Terraform resource creation and destruction were also validated using a disposable S3 resource without modifying the live application infrastructure.
 
 Remaining AWS deployment work includes HTTPS, domain configuration, and further production security hardening.
 
