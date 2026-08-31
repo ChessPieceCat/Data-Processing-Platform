@@ -58,3 +58,51 @@ resource "aws_iam_role_policy" "github_actions_ecr" {
     ]
   })
 }
+
+resource "aws_iam_role_policy_attachment" "github_actions_read_only" {
+  role       = aws_iam_role.github_actions.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+resource "aws_iam_role_policy" "github_actions_state" {
+  name = "terraform-state"
+  role = aws_iam_role.github_actions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ListStateBucket"
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket"
+        ]
+        Resource = "arn:aws:s3:::data-processing-platform-terraform-state-410126553529"
+        Condition = {
+          StringEquals = {
+            "s3:prefix" = "data-processing-platform/terraform.tfstate"
+          }
+        }
+      },
+      {
+        Sid    = "ManageState"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = "arn:aws:s3:::data-processing-platform-terraform-state-410126553529/data-processing-platform/terraform.tfstate"
+      },
+      {
+        Sid    = "ManageStateLock"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "arn:aws:s3:::data-processing-platform-terraform-state-410126553529/data-processing-platform/terraform.tfstate.tflock"
+      }
+    ]
+  })
+}
