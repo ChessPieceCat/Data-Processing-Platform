@@ -137,7 +137,8 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 
 - Automatic cleanup of older jobs while retaining the most recent jobs
 - Automated Go and Python tests
-- GitHub Actions CI for Terraform validation, Go tests, all Python processor tests, and both Go binaries
+- GitHub Actions CI for Terraform validation, Go tests, Go vet, all Python processor tests, and both Go binaries
+- Docker image builds are validated in CI, and images from the main branch are published to Amazon ECR
 - Three worker replicas by default in Docker Compose
 - Configurable worker scaling through Docker Compose
 - Queue backpressure with a maximum of 100 outstanding queued or processing jobs
