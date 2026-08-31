@@ -77,33 +77,33 @@ func main() {
 	// Handle the results page.
 	http.HandleFunc(
 		"/results",
-		apphttp.ResultsHandler(db),
+		apphttp.ResultsHandler(db, store),
 	)
 
 	http.HandleFunc(
 		"/results/visualization",
-		apphttp.VisualizationHandler(db),
+		apphttp.VisualizationHandler(db, store),
 	)
 
 	http.HandleFunc(
 		"/results/image",
-		apphttp.ImageResultHandler(db),
+		apphttp.ImageResultHandler(db, store),
 	)
 
 	// Handle the download of result files.
 	http.HandleFunc(
 		"/results/download",
-		apphttp.DownloadResultsHandler(db),
+		apphttp.DownloadResultsHandler(db, store),
 	)
 
 	http.HandleFunc(
 		"/results/download/model",
-		apphttp.DownloadModelHandler(db),
+		apphttp.DownloadModelHandler(db, store),
 	)
 
 	http.HandleFunc(
 		"/results/download/metadata",
-		apphttp.DownloadImageMetadataHandler(db),
+		apphttp.DownloadImageMetadataHandler(db, store),
 	)
 
 	// Handle dataset inspection.

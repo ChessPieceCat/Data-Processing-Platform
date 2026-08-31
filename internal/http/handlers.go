@@ -52,7 +52,7 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 }
 
 // ResultsHandler handles the results page.
-func ResultsHandler(db *sql.DB) http.HandlerFunc {
+func ResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		jobID, err := parseJobID(r)
 		if err != nil {
@@ -86,7 +86,7 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 
 		switch job.Type {
 		case "dataset":
-			if err := loadDatasetPageResults(&page); err != nil {
+			if err := loadDatasetPageResults(&page, store); err != nil {
 				log.Printf(
 					"Error loading dataset results for job %d: %v",
 					jobID,
@@ -113,7 +113,7 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 			}
 
 		case "image":
-			if err := loadImagePageResults(&page); err != nil {
+			if err := loadImagePageResults(&page, store); err != nil {
 				log.Printf(
 					"Error loading image results for job %d: %v",
 					jobID,
@@ -143,7 +143,7 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 			}
 
 		case "route":
-			if err := loadRoutePageResults(&page); err != nil {
+			if err := loadRoutePageResults(&page, store); err != nil {
 				log.Printf(
 					"Error loading route results for job %d: %v",
 					jobID,
@@ -180,13 +180,17 @@ func ResultsHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-func loadRoutePageResults(page *ResultsPage) error {
+func loadRoutePageResults(
+	page *ResultsPage,
+	store storage.Storage,
+) error {
 	if page.Job.Status != "completed" ||
 		page.Job.ResultReference == nil {
 		return nil
 	}
 
 	results, err := loadRouteResults(
+		store,
 		*page.Job.ResultReference,
 	)
 	if err != nil {
@@ -200,13 +204,17 @@ func loadRoutePageResults(page *ResultsPage) error {
 	return nil
 }
 
-func loadDatasetPageResults(page *ResultsPage) error {
+func loadDatasetPageResults(
+	page *ResultsPage,
+	store storage.Storage,
+) error {
 	if page.Job.Status != "completed" ||
 		page.Job.ResultReference == nil {
 		return nil
 	}
 
 	results, err := loadDatasetResults(
+		store,
 		*page.Job.ResultReference,
 	)
 	if err != nil {
@@ -219,7 +227,10 @@ func loadDatasetPageResults(page *ResultsPage) error {
 	page.Results = results
 	page.VisualizationResults = results.Visualizations
 
-	modelResults, err := loadModelResults(page.Job.ID)
+	modelResults, err := loadModelResults(
+		store,
+		page.Job.ID,
+	)
 	if err != nil {
 		return fmt.Errorf(
 			"failed to load model results: %w",
@@ -228,16 +239,20 @@ func loadDatasetPageResults(page *ResultsPage) error {
 	}
 
 	page.ModelResults = modelResults
-
 	return nil
 }
 
-func loadRouteResults(path string) (*RouteResults, error) {
-	resultFile, err := os.Open(path)
+func loadRouteResults(
+	store storage.Storage,
+	key string,
+) (*RouteResults, error) {
+	resultFile, err := store.Get(
+		context.Background(),
+		key,
+	)
 	if err != nil {
 		return nil, err
 	}
-
 	defer resultFile.Close()
 
 	var results RouteResults
@@ -250,13 +265,17 @@ func loadRouteResults(path string) (*RouteResults, error) {
 }
 
 // loadImagePageResults loads image-processing results for a completed job.
-func loadImagePageResults(page *ResultsPage) error {
+func loadImagePageResults(
+	page *ResultsPage,
+	store storage.Storage,
+) error {
 	if page.Job.Status != "completed" ||
 		page.Job.ResultReference == nil {
 		return nil
 	}
 
 	results, err := loadImageResults(
+		store,
 		*page.Job.ResultReference,
 	)
 	if err != nil {
@@ -267,7 +286,6 @@ func loadImagePageResults(page *ResultsPage) error {
 	}
 
 	page.ImageResults = results
-
 	return nil
 }
 
@@ -1099,7 +1117,7 @@ func getImageConfig(
 }
 
 // DownloadResultsHandler handles downloading a job's results.
-func DownloadResultsHandler(db *sql.DB) http.HandlerFunc {
+func DownloadResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1129,9 +1147,12 @@ func DownloadResultsHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		resultFile, err := os.Open(*job.ResultReference)
+		resultFile, err := store.Get(
+			r.Context(),
+			*job.ResultReference,
+		)
 		if err != nil {
-			log.Println("Error opening result file:", err)
+			log.Println("Error opening result object:", err)
 			http.Error(w, "Results could not be found.", http.StatusNotFound)
 			return
 		}
@@ -1152,7 +1173,7 @@ func DownloadResultsHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // DownloadModelHandler handles downloading a job's model results.
-func DownloadModelHandler(db *sql.DB) http.HandlerFunc {
+func DownloadModelHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1182,16 +1203,52 @@ func DownloadModelHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		modelResultsPath := fmt.Sprintf("uploads/%d/results_model_results.json", job.ID)
-		modelFile, err := os.Open(modelResultsPath)
+		modelResultsKey := fmt.Sprintf(
+			"jobs/%d/results_model_results.json",
+			job.ID,
+		)
+
+		modelFile, err := store.Get(
+			r.Context(),
+			modelResultsKey,
+		)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				http.Error(w, "Model results are not available.", http.StatusNotFound)
+			exists, existsErr := store.Exists(
+				r.Context(),
+				modelResultsKey,
+			)
+			if existsErr != nil {
+				log.Println(
+					"Error checking model results object:",
+					existsErr,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
 				return
 			}
 
-			log.Println("Error opening model results file:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			if !exists {
+				http.Error(
+					w,
+					"Model results are not available.",
+					http.StatusNotFound,
+				)
+				return
+			}
+
+			log.Println(
+				"Error opening model results object:",
+				err,
+			)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
 			return
 		}
 		defer modelFile.Close()
@@ -1211,7 +1268,7 @@ func DownloadModelHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // DownloadImageMetadataHandler handles downloading an image job's full metadata.
-func DownloadImageMetadataHandler(db *sql.DB) http.HandlerFunc {
+func DownloadImageMetadataHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(
@@ -1277,6 +1334,7 @@ func DownloadImageMetadataHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		results, err := loadImageResults(
+			store,
 			*job.ResultReference,
 		)
 		if err != nil {
@@ -1303,7 +1361,10 @@ func DownloadImageMetadataHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		metadataFile, err := os.Open(results.MetadataReference)
+		metadataFile, err := store.Get(
+			r.Context(),
+			results.MetadataReference,
+		)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				http.Error(
@@ -1869,14 +1930,21 @@ func parseJobID(r *http.Request) (int64, error) {
 }
 
 // loadDatasetResults loads the dataset-analysis results for a job.
-func loadDatasetResults(resultPath string) (*DatasetResults, error) {
-	resultFile, err := os.Open(resultPath)
+func loadDatasetResults(
+	store storage.Storage,
+	key string,
+) (*DatasetResults, error) {
+	resultFile, err := store.Get(
+		context.Background(),
+		key,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer resultFile.Close()
 
 	var results DatasetResults
+
 	if err := json.NewDecoder(resultFile).Decode(&results); err != nil {
 		return nil, err
 	}
@@ -1885,8 +1953,14 @@ func loadDatasetResults(resultPath string) (*DatasetResults, error) {
 }
 
 // loadImageResults loads image-processing results from a result JSON file.
-func loadImageResults(resultPath string) (*ImageResults, error) {
-	resultFile, err := os.Open(resultPath)
+func loadImageResults(
+	store storage.Storage,
+	key string,
+) (*ImageResults, error) {
+	resultFile, err := store.Get(
+		context.Background(),
+		key,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1903,18 +1977,38 @@ func loadImageResults(resultPath string) (*ImageResults, error) {
 
 // loadModelResults loads the model results for a job.
 // A missing model-results file means no model was requested.
-func loadModelResults(jobID int64) (*ModelResults, error) {
-	modelResultsPath := fmt.Sprintf("uploads/%d/results_model_results.json", jobID)
-	modelFile, err := os.Open(modelResultsPath)
+func loadModelResults(
+	store storage.Storage,
+	jobID int64,
+) (*ModelResults, error) {
+	modelResultsKey := fmt.Sprintf(
+		"jobs/%d/results_model_results.json",
+		jobID,
+	)
+
+	exists, err := store.Exists(
+		context.Background(),
+		modelResultsKey,
+	)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
+		return nil, err
+	}
+
+	if !exists {
+		return nil, nil
+	}
+
+	modelFile, err := store.Get(
+		context.Background(),
+		modelResultsKey,
+	)
+	if err != nil {
 		return nil, err
 	}
 	defer modelFile.Close()
 
 	var modelResults ModelResults
+
 	if err := json.NewDecoder(modelFile).Decode(&modelResults); err != nil {
 		return nil, err
 	}
@@ -2079,7 +2173,7 @@ type inspectionResponse struct {
 	Columns  []string `json:"columns"`
 }
 
-func VisualizationHandler(db *sql.DB) http.HandlerFunc {
+func VisualizationHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		jobIDInt, err := parseJobID(r)
@@ -2132,13 +2226,35 @@ func VisualizationHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		visualizationPath := filepath.Join(
-			fmt.Sprintf("uploads/%d", job.ID),
+		visualizationKey := fmt.Sprintf(
+			"jobs/%d/%s",
+			job.ID,
 			filename,
 		)
 
-		if _, err := os.Stat(visualizationPath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+		visualizationFile, err := store.Get(
+			r.Context(),
+			visualizationKey,
+		)
+		if err != nil {
+			exists, existsErr := store.Exists(
+				r.Context(),
+				visualizationKey,
+			)
+			if existsErr != nil {
+				log.Println(
+					"Error checking visualization object:",
+					existsErr,
+				)
+				http.Error(
+					w,
+					"Internal server error",
+					http.StatusInternalServerError,
+				)
+				return
+			}
+
+			if !exists {
 				http.Error(
 					w,
 					"Requested visualization is not available.",
@@ -2147,17 +2263,38 @@ func VisualizationHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 
-			log.Println("Error checking visualization file:", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			log.Println(
+				"Error opening visualization object:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
 			return
 		}
+		defer visualizationFile.Close()
 
-		http.ServeFile(w, r, visualizationPath)
+		w.Header().Set(
+			"Content-Type",
+			"image/png",
+		)
+
+		if _, err := io.Copy(
+			w,
+			visualizationFile,
+		); err != nil {
+			log.Println(
+				"Error sending visualization:",
+				err,
+			)
+		}
 	}
 }
 
 // ImageResultHandler serves original or processed images for a completed job.
-func ImageResultHandler(db *sql.DB) http.HandlerFunc {
+func ImageResultHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(
@@ -2223,6 +2360,7 @@ func ImageResultHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		results, err := loadImageResults(
+			store,
 			*job.ResultReference,
 		)
 		if err != nil {
@@ -2242,15 +2380,13 @@ func ImageResultHandler(db *sql.DB) http.HandlerFunc {
 
 		imageType := r.URL.Query().Get("type")
 
-		var imagePath string
+		var imageKey string
 
 		switch imageType {
 		case "original":
-			imagePath = results.OriginalPath
-
+			imageKey = results.OriginalPath
 		case "processed":
-			imagePath = results.ProcessedPath
-
+			imageKey = results.ProcessedPath
 		default:
 			http.Error(
 				w,
@@ -2260,82 +2396,54 @@ func ImageResultHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		jobDirectory := filepath.Join(
-			"uploads",
-			strconv.FormatInt(jobID, 10),
+		imageFile, err := store.Get(
+			r.Context(),
+			imageKey,
+		)
+		if err != nil {
+			log.Printf(
+				"Error opening image object for job %d: %v",
+				jobID,
+				err,
+			)
+			http.Error(
+				w,
+				"Requested image is not available.",
+				http.StatusNotFound,
+			)
+			return
+		}
+		defer imageFile.Close()
+
+		contentType := "application/octet-stream"
+
+		switch strings.ToLower(
+			filepath.Ext(imageKey),
+		) {
+		case ".jpg", ".jpeg":
+			contentType = "image/jpeg"
+		case ".png":
+			contentType = "image/png"
+		case ".webp":
+			contentType = "image/webp"
+		case ".gif":
+			contentType = "image/gif"
+		}
+
+		w.Header().Set(
+			"Content-Type",
+			contentType,
 		)
 
-		absoluteJobDirectory, err := filepath.Abs(jobDirectory)
-		if err != nil {
-			log.Println(
-				"Error resolving job directory:",
-				err,
-			)
-
-			http.Error(
-				w,
-				"Internal server error",
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		absoluteImagePath, err := filepath.Abs(imagePath)
-		if err != nil {
-			log.Println(
-				"Error resolving image path:",
-				err,
-			)
-
-			http.Error(
-				w,
-				"Internal server error",
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		relativePath, err := filepath.Rel(
-			absoluteJobDirectory,
-			absoluteImagePath,
-		)
-		if err != nil || relativePath == ".." ||
-			strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) {
-			http.Error(
-				w,
-				"Invalid image path.",
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		if _, err := os.Stat(absoluteImagePath); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				http.Error(
-					w,
-					"Requested image is not available.",
-					http.StatusNotFound,
-				)
-				return
-			}
-
-			log.Println(
-				"Error checking image file:",
-				err,
-			)
-
-			http.Error(
-				w,
-				"Internal server error",
-				http.StatusInternalServerError,
-			)
-			return
-		}
-
-		http.ServeFile(
+		if _, err := io.Copy(
 			w,
-			r,
-			absoluteImagePath,
-		)
+			imageFile,
+		); err != nil {
+			log.Printf(
+				"Error sending image for job %d: %v",
+				jobID,
+				err,
+			)
+		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -131,8 +132,8 @@ func getDatabaseURL() string {
 
 	return fmt.Sprintf(
 		"postgresql://%s:%s@%s:%s/%s?sslmode=%s",
-		user,
-		password,
+		url.PathEscape(user),
+		url.PathEscape(password),
 		host,
 		port,
 		name,
