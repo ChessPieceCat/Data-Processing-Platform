@@ -1,14 +1,18 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -99,6 +103,68 @@ func getEnv(
 	return value
 }
 
+type rdsSecret struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func getDatabasePassword() string {
+	secretARN := os.Getenv("DB_SECRET_ARN")
+
+	// Local development continues to use DB_PASSWORD.
+	if secretARN == "" {
+		return getEnv(
+			"DB_PASSWORD",
+			"dev_password",
+		)
+	}
+
+	ctx := context.Background()
+
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatal(
+			"Error loading AWS configuration:",
+			err,
+		)
+	}
+
+	client := secretsmanager.NewFromConfig(cfg)
+
+	result, err := client.GetSecretValue(
+		ctx,
+		&secretsmanager.GetSecretValueInput{
+			SecretId: &secretARN,
+		},
+	)
+	if err != nil {
+		log.Fatal(
+			"Error retrieving database secret:",
+			err,
+		)
+	}
+
+	var secret rdsSecret
+
+	if err := json.Unmarshal(
+		[]byte(*result.SecretString),
+		&secret,
+	); err != nil {
+		log.Fatal(
+			"Error parsing database secret:",
+			err,
+		)
+	}
+
+	if secret.Password == "" {
+		log.Fatal(
+			"Database secret does not contain a password",
+		)
+	}
+
+	return secret.Password
+}
+
 func getDatabaseURL() string {
 	host := getEnv(
 		"DB_HOST",
@@ -115,10 +181,7 @@ func getDatabaseURL() string {
 		"data_platform",
 	)
 
-	password := getEnv(
-		"DB_PASSWORD",
-		"dev_password",
-	)
+	password := getDatabasePassword()
 
 	name := getEnv(
 		"DB_NAME",
