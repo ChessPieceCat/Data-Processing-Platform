@@ -1,0 +1,57 @@
+services:
+  app:
+    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:05a7abbc1cbf98e32152df48bdbd1491da2a872d
+    command: ./server
+    ports:
+      - "8084:8082"
+    environment:
+      STORAGE_BACKEND: s3
+      S3_BUCKET: data-processing-platform-chess
+      AWS_REGION: us-east-2
+
+      DB_HOST: database-1.chackaqe0fr0.us-east-2.rds.amazonaws.com
+      DB_PORT: "5432"
+      DB_USER: dbadmin
+      DB_NAME: data_platform
+      DB_SSLMODE: require
+      DB_SECRET_ARN: ${DB_SECRET_ARN}
+
+      REDIS_ADDR: redis:6379
+      PYTHON_BIN: /opt/venv/bin/python
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:05a7abbc1cbf98e32152df48bdbd1491da2a872d
+    command: ./worker
+    environment:
+      STORAGE_BACKEND: s3
+      S3_BUCKET: data-processing-platform-chess
+      AWS_REGION: us-east-2
+
+      DB_HOST: database-1.chackaqe0fr0.us-east-2.rds.amazonaws.com
+      DB_PORT: "5432"
+      DB_USER: dbadmin
+      DB_NAME: data_platform
+      DB_SSLMODE: require
+      DB_SECRET_ARN: ${DB_SECRET_ARN}
+
+      REDIS_ADDR: redis:6379
+      PYTHON_BIN: /opt/venv/bin/python
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:8
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  redis_data:
