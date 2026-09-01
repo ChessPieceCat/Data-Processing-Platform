@@ -1,6 +1,6 @@
 services:
   app:
-    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:05a7abbc1cbf98e32152df48bdbd1491da2a872d
+    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:${IMAGE_TAG}
     command: ./server
     ports:
       - "8084:8082"
@@ -23,7 +23,7 @@ services:
         condition: service_healthy
 
   worker:
-    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:05a7abbc1cbf98e32152df48bdbd1491da2a872d
+    image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:${IMAGE_TAG}
     command: ./worker
     environment:
       STORAGE_BACKEND: s3
