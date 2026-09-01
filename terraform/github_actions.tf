@@ -178,3 +178,59 @@ resource "aws_iam_role_policy" "github_terraform_state" {
     ]
   })
 }
+
+resource "aws_iam_role" "github_deploy" {
+  name = "data-processing-platform-github-deploy"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+            "token.actions.githubusercontent.com:sub" = "repo:ChessPieceCat@162753184/Data-Processing-Platform@1343320648:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "github_deploy_ssm" {
+  name = "deploy-via-ssm"
+  role = aws_iam_role.github_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SendDeploymentCommand"
+        Effect = "Allow"
+        Action = [
+          "ssm:SendCommand"
+        ]
+        Resource = [
+          "arn:aws:ssm:us-east-2::document/AWS-RunShellScript",
+          "arn:aws:ec2:us-east-2:410126553529:instance/i-039ced26aad174d78"
+        ]
+      },
+      {
+        Sid    = "InspectDeploymentCommand"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommandInvocations",
+          "ssm:ListCommands"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
