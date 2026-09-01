@@ -9,7 +9,7 @@ resource "aws_instance" "app" {
   monitoring             = false
 
   root_block_device {
-    volume_size = 8
+    volume_size = 16
     volume_type = "gp3"
     iops        = 3000
     throughput  = 125
