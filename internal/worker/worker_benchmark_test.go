@@ -189,8 +189,9 @@ func runWorkerThroughputTrial(
 			defer workerWG.Done()
 
 			workersReady <- struct{}{}
-
+			m := createTestMetrics()
 			RunWorker(
+				m,
 				ctx,
 				db,
 				redisClient,

@@ -34,7 +34,9 @@ import (
 	"testing"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 
@@ -1224,11 +1226,12 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	store := storage.NewLocalStorage(t.TempDir())
-
+	metrics := createTestMetrics()
 	handler := DatasetSubmissionHandler(
 		db,
 		redisClient,
 		store,
+		metrics,
 	)
 
 	handler(rec, req)
@@ -1927,11 +1930,12 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	store := storage.NewLocalStorage(t.TempDir())
-
+	metrics := createTestMetrics()
 	handler := ImageSubmissionHandler(
 		db,
 		redisClient,
 		store,
+		metrics,
 	)
 
 	handler(rec, req)
@@ -2197,4 +2201,9 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 
 	}
 
+}
+
+func createTestMetrics() *metrics.Metrics {
+	registry := prometheus.NewRegistry()
+	return metrics.NewMetrics(registry)
 }

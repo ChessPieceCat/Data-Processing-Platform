@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 
@@ -945,11 +947,13 @@ func TestProcessJobSuccess(t *testing.T) {
 			err,
 		)
 	}
+	m := createTestMetrics()
 
 	if err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	); err != nil {
 		t.Fatalf(
 			"ProcessJob failed: %v",
@@ -1147,11 +1151,12 @@ func TestProcessImageJobSuccess(t *testing.T) {
 			err,
 		)
 	}
-
+	m := createTestMetrics()
 	if err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	); err != nil {
 		t.Fatalf(
 			"ProcessJob failed for image job: %v",
@@ -1234,11 +1239,12 @@ func TestProcessJobFailure(t *testing.T) {
 			err,
 		)
 	}
-
+	m := createTestMetrics()
 	err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	)
 	if err == nil {
 		t.Fatal("expected ProcessJob to fail")
@@ -1278,11 +1284,12 @@ func TestProcessJobMissingInput(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
 	jobID := createTestJob(t, db)
-
+	m := createTestMetrics()
 	err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	)
 	if err == nil {
 		t.Fatal("expected ProcessJob to fail")
@@ -1489,11 +1496,12 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 			err,
 		)
 	}
-
+	m := createTestMetrics()
 	err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	)
 	if err == nil {
 		t.Fatal("expected ProcessJob to fail")
@@ -1738,11 +1746,12 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 			err,
 		)
 	}
-
+	m := createTestMetrics()
 	if err := ProcessJob(
 		db,
 		jobID,
 		store,
+		m,
 	); err != nil {
 		t.Fatalf(
 			"ProcessJob failed for route job: %v",
@@ -1974,12 +1983,11 @@ func TestCreateJobWithLimit(t *testing.T) {
 	clearJobsTable(t, db)
 
 	for i := 0; i < MaxOutstandingJobs; i++ {
-
+		m := createTestMetrics()
 		if _, err := CreateJobWithLimit(
-
 			db,
-
 			"dataset",
+			m,
 		); err != nil {
 
 			t.Fatalf(
@@ -1994,12 +2002,13 @@ func TestCreateJobWithLimit(t *testing.T) {
 		}
 
 	}
-
+	m := createTestMetrics()
 	if _, err := CreateJobWithLimit(
 
 		db,
 
 		"dataset",
+		m,
 	); !errors.Is(err, ErrJobQueueFull) {
 
 		t.Fatalf(
@@ -2022,7 +2031,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 	db := setupTestDatabase(t)
 
 	clearJobsTable(t, db)
-
+	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs; i++ {
 
 		if _, err := CreateJobWithLimit(
@@ -2030,14 +2039,12 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 			db,
 
 			"dataset",
+			m,
 		); err != nil {
 
 			t.Fatalf(
-
 				"failed to create job %d: %v",
-
 				i+1,
-
 				err,
 			)
 
@@ -2080,6 +2087,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 		db,
 
 		"dataset",
+		m,
 	); err != nil {
 
 		t.Fatalf(
@@ -2102,7 +2110,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 	db := setupTestDatabase(t)
 
 	clearJobsTable(t, db)
-
+	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs-1; i++ {
 
 		if _, err := CreateJobWithLimit(
@@ -2110,6 +2118,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 			db,
 
 			"dataset",
+			m,
 		); err != nil {
 
 			t.Fatalf(
@@ -2142,6 +2151,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 				db,
 
 				"dataset",
+				m,
 			)
 
 			results <- err
@@ -2205,4 +2215,114 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 
 	}
 
+}
+
+func createTestMetrics() *metrics.Metrics {
+	registry := prometheus.NewRegistry()
+	return metrics.NewMetrics(registry)
+}
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name: "storage",
+			err: categorizeError(
+				errorStorage,
+				errors.New("storage failed"),
+			),
+			expected: "storage",
+		},
+		{
+			name: "filesystem",
+			err: categorizeError(
+				errorFilesystem,
+				errors.New("filesystem failed"),
+			),
+			expected: "filesystem",
+		},
+		{
+			name: "processor",
+			err: categorizeError(
+				errorProcessor,
+				errors.New("processor failed"),
+			),
+			expected: "processor",
+		},
+		{
+			name: "validation",
+			err: categorizeError(
+				errorValidation,
+				errors.New("validation failed"),
+			),
+			expected: "validation",
+		},
+		{
+			name: "configuration",
+			err: categorizeError(
+				errorConfiguration,
+				errors.New("configuration failed"),
+			),
+			expected: "configuration",
+		},
+		{
+			name: "database",
+			err: categorizeError(
+				errorDatabase,
+				errors.New("database failed"),
+			),
+			expected: "database",
+		},
+		{
+			name:     "timeout",
+			err:      context.DeadlineExceeded,
+			expected: "timeout",
+		},
+		{
+			name:     "cancelled",
+			err:      context.Canceled,
+			expected: "cancelled",
+		},
+		{
+			name:     "unknown",
+			err:      errors.New("something unexpected happened"),
+			expected: "unknown",
+		},
+		{
+			name: "wrapped categorized error",
+			err: fmt.Errorf(
+				"outer error: %w",
+				categorizeError(
+					errorStorage,
+					errors.New("storage failed"),
+				),
+			),
+			expected: "storage",
+		},
+		{
+			name: "retry limit",
+			err: categorizeError(
+				errorRetryLimit,
+				errors.New("maximum attempts reached"),
+			),
+			expected: "retry_limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyError(tt.err)
+
+			if got != tt.expected {
+				t.Fatalf(
+					"expected error category %q, got %q",
+					tt.expected,
+					got,
+				)
+			}
+		})
+	}
 }

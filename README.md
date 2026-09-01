@@ -139,6 +139,36 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 - Cleanup of temporary and per-job files
 - Database and Redis health checks in the containerized development environment
 
+### Monitoring and Observability
+
+The application exposes Prometheus metrics for job processing, queue state, worker health, and API errors.
+
+#### Application Metrics
+
+The following metrics are exposed:
+
+- `jobs_submitted_total` — number of successfully submitted jobs, labeled by job type
+- `jobs_completed_total` — number of successfully completed jobs, labeled by job type
+- `jobs_failed_total` — number of permanently failed jobs, labeled by job type and error type
+- `job_processing_duration_seconds` — job processing duration histogram, labeled by job type
+- `queue_depth` — current number of queued jobs, labeled by job type
+- `worker_errors_total` — worker-level errors, labeled by error type
+- `api_errors_total` — HTTP 5xx responses, labeled by method, route, and status
+
+Processing throughput can be derived from `jobs_completed_total` using Prometheus rate calculations rather than requiring a separate throughput metric.
+
+Queue depth is derived from PostgreSQL job state, which remains the source of truth for queued work. Metrics are refreshed when job state changes rather than requiring continuous database polling.
+
+The Go HTTP server exposes its metrics through the `/metrics` endpoint. The worker process exposes its own metrics endpoint because the server and worker run as separate processes.
+
+#### Error Classification
+
+Application and worker errors are classified into controlled error types for use as Prometheus labels rather than using raw error messages or job-specific values. This keeps metric cardinality bounded while still allowing failures to be analyzed by category.
+
+#### Observability Roadmap
+
+The current observability implementation provides application-level Prometheus instrumentation for job and worker behavior. Prometheus collection, dashboards, and additional structured logging are planned as subsequent monitoring work.
+
 ### Platform
 
 - Automatic cleanup of older jobs while retaining the most recent jobs
@@ -440,6 +470,11 @@ For local filesystem storage:
 export STORAGE_BACKEND=local
 ```
 
+For local PostgreSQL instances that do not support SSL, set:
+
+```bash
+export DB_SSLMODE=disable
+```
 Then start the Go server:
 
 ```bash

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -16,7 +17,7 @@ const maxJobAttempts = 3
 const pendingJobMinIdle = 30 * time.Second
 
 // Connect to job_queue and wait for new jobs.
-func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error, consumerName string) {
+func RunWorker(m *metrics.Metrics, ctx context.Context, db *sql.DB, redisClient *redis.Client, processJob func(jobID int64) error, consumerName string) {
 	for {
 		// Read from the Redis stream.
 		streams, err := redisClient.XReadGroup(
@@ -40,6 +41,7 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 					"Error reading from Redis stream: %v",
 					err,
 				)
+				recordWorkerError(m, "redis")
 			}
 
 			continue
@@ -54,6 +56,7 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 				jobIDStr, ok := message.Values["job_id"].(string)
 				if !ok {
 					fmt.Println("Invalid job_id in message:", message.Values)
+					recordWorkerError(m, "invalid_message")
 					continue
 				}
 
@@ -61,6 +64,7 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 
 				if err != nil {
 					fmt.Println("Error converting job_id to int64:", err)
+					recordWorkerError(m, "invalid_message")
 					continue
 				}
 
@@ -84,6 +88,7 @@ func RunWorker(ctx context.Context, db *sql.DB, redisClient *redis.Client, proce
 				if ack {
 					if err := redisClient.XAck(ctx, "job_queue", "job_workers", message.ID).Err(); err != nil {
 						fmt.Println("Error acknowledging message:", err)
+						recordWorkerError(m, "acknowledgement")
 					}
 				}
 
@@ -99,6 +104,7 @@ func RecoverPendingJobs(
 	redisClient *redis.Client,
 	processJob func(jobID int64) error,
 	consumerName string,
+	m *metrics.Metrics,
 ) {
 	recoverPendingJobs(
 		db,
@@ -106,6 +112,7 @@ func RecoverPendingJobs(
 		processJob,
 		consumerName,
 		pendingJobMinIdle,
+		m,
 	)
 }
 
@@ -115,6 +122,7 @@ func recoverPendingJobs(
 	processJob func(jobID int64) error,
 	consumerName string,
 	minIdle time.Duration,
+	m *metrics.Metrics,
 ) {
 	ctx := context.Background()
 
@@ -135,6 +143,7 @@ func recoverPendingJobs(
 			"Error claiming pending messages: %v",
 			err,
 		)
+		recordWorkerError(m, "redis")
 		return
 	}
 
@@ -146,6 +155,7 @@ func recoverPendingJobs(
 				message.ID,
 				message.Values,
 			)
+			recordWorkerError(m, "invalid_message")
 			continue
 		}
 
@@ -160,6 +170,7 @@ func recoverPendingJobs(
 				message.ID,
 				err,
 			)
+			recordWorkerError(m, "invalid_message")
 			continue
 		}
 
@@ -173,6 +184,7 @@ func recoverPendingJobs(
 				jobID,
 				err,
 			)
+			recordWorkerError(m, "database")
 			continue
 		}
 
@@ -190,6 +202,7 @@ func recoverPendingJobs(
 					jobID,
 					err,
 				)
+				recordWorkerError(m, "acknowledgement")
 			}
 
 			continue
@@ -212,8 +225,16 @@ func recoverPendingJobs(
 					jobID,
 					err,
 				)
+				recordWorkerError(m, "database")
 				continue
 			}
+
+			m.JobsFailed.
+				WithLabelValues(
+					job.Type,
+					"retry_limit",
+				).
+				Inc()
 
 			if err := redisClient.XAck(
 				ctx,
@@ -226,6 +247,7 @@ func recoverPendingJobs(
 					jobID,
 					err,
 				)
+				recordWorkerError(m, "acknowledgement")
 			}
 
 			continue
@@ -252,6 +274,16 @@ func recoverPendingJobs(
 				jobID,
 				err,
 			)
+			recordWorkerError(m, "acknowledgement")
 		}
 	}
+}
+
+func recordWorkerError(
+	m *metrics.Metrics,
+	errorType string,
+) {
+	m.WorkerErrors.
+		WithLabelValues(errorType).
+		Inc()
 }

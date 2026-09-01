@@ -16,6 +16,7 @@ import (
 	"text/template"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -297,10 +298,12 @@ func prepareJob(
 	jobType string,
 	sourcePath string,
 	filename string,
+	m *metrics.Metrics,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		jobType,
+		m,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -385,10 +388,12 @@ func prepareRouteJob(
 	store storage.Storage,
 	routeTempPath string,
 	distanceTempPath string,
+	m *metrics.Metrics,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		"route",
+		m,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -550,6 +555,7 @@ func finalizeJobSubmission(
 	store storage.Storage,
 	jobID int64,
 	saveConfig func(int64) (string, error),
+	m *metrics.Metrics,
 ) error {
 	if _, err := saveConfig(jobID); err != nil {
 		_ = jobs.DeleteJob(
@@ -580,6 +586,10 @@ func finalizeJobSubmission(
 		)
 	}
 
+	if err := jobs.UpdateQueueDepth(db, m); err != nil {
+		log.Printf("Error updating queue depth: %v", err)
+	}
+
 	return nil
 }
 
@@ -588,6 +598,7 @@ func RouteSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
 	store storage.Storage,
+	m *metrics.Metrics,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -654,6 +665,7 @@ func RouteSubmissionHandler(
 			store,
 			routeTempPath,
 			distanceTempPath,
+			m,
 		)
 		if err != nil {
 			if errors.Is(
@@ -699,6 +711,7 @@ func RouteSubmissionHandler(
 					store,
 				)
 			},
+			m,
 		); err != nil {
 			log.Printf(
 				"Error finalizing route job %d: %v",
@@ -728,6 +741,7 @@ func DatasetSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
 	store storage.Storage,
+	m *metrics.Metrics,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -795,6 +809,7 @@ func DatasetSubmissionHandler(
 			"dataset",
 			tempPath,
 			"dataset.csv",
+			m,
 		)
 		if err != nil {
 			if errors.Is(
@@ -840,6 +855,7 @@ func DatasetSubmissionHandler(
 					store,
 				)
 			},
+			m,
 		); err != nil {
 			log.Printf(
 				"Error finalizing dataset job %d: %v",
@@ -869,6 +885,7 @@ func ImageSubmissionHandler(
 	db *sql.DB,
 	redisClient *redis.Client,
 	store storage.Storage,
+	m *metrics.Metrics,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -936,6 +953,7 @@ func ImageSubmissionHandler(
 			"image",
 			tempPath,
 			"input"+filepath.Ext(tempPath),
+			m,
 		)
 		if err != nil {
 			if errors.Is(
@@ -981,6 +999,7 @@ func ImageSubmissionHandler(
 					store,
 				)
 			},
+			m,
 		); err != nil {
 			log.Printf(
 				"Error finalizing image job %d: %v",
