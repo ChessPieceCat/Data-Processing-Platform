@@ -52,6 +52,12 @@ The current implementation supports:
 - Terraform remote state stored in Amazon S3 with state locking
 - Existing AWS infrastructure imported and reconciled into Terraform state
 - Terraform lifecycle validation using a disposable resource creation and destruction test
+- GitHub Actions CI for Terraform formatting and validation, Go tests, Go vet, all Python processor tests, and ARM64 Docker image builds
+- Terraform pull-request plans against the remote AWS state using a dedicated read-only AWS role
+- ARM64 application images published to Amazon ECR from the main branch
+- Automated EC2 deployment through AWS Systems Manager after successful main-branch image publication
+- Separate GitHub OIDC roles for ECR publishing, Terraform planning, and EC2 deployment
+- Protected main-branch workflow requiring CI and infrastructure checks before merging
 
 ### Dataset Processing
 
@@ -137,7 +143,7 @@ The current route processor uses the **nearest-neighbor + 2-opt** algorithm. Loc
 
 - Automatic cleanup of older jobs while retaining the most recent jobs
 - Automated Go and Python tests
-- GitHub Actions CI for Terraform validation, Go tests, Go vet, all Python processor tests, and both Go binaries
+- GitHub Actions CI/CD for Terraform formatting and validation, Go tests and vet, Python processor tests, ARM64 Docker image builds, Amazon ECR publication, Terraform pull-request plans, and automated EC2 deployment
 - Docker image builds are validated in CI, and images from the main branch are published to Amazon ECR
 - Three worker replicas by default in Docker Compose
 - Configurable worker scaling through Docker Compose
@@ -177,25 +183,26 @@ ProcessJob
 AWS Deployment
 
 Browser
-   |
-   v
-EC2 Go HTTP server
-   |
-   +---- Amazon RDS PostgreSQL
-   |
-   +---- Redis on EC2
-   |
-   +---- Amazon S3
-   |
-   v
-EC2 Go worker
-   |
-   v
+    |
+    v
+EC2 Docker Compose
+    |
+    +---- Go HTTP server
+    |
+    +---- Go worker
+    |
+    +---- Redis
+    |
+    +---- Amazon RDS PostgreSQL
+    |
+    +---- Amazon S3
+    |
+    v
 ProcessJob
-   |
-   +---- Dataset processor
-   +---- Image processor
-   +---- Route processor
+    |
+    +---- Dataset processor
+    +---- Image processor
+    +---- Route processor
 ```
 
 The application and worker are separate processes:
@@ -205,9 +212,10 @@ The application and worker are separate processes:
 - **PostgreSQL** stores persistent job state and metadata.
 - **Redis** transports job IDs asynchronously between the application and worker.
 - The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
-- The current AWS deployment runs the Go server, Go worker, and Redis on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. RDS master credentials are managed through AWS Secrets Manager and retrieved by the application using the EC2 IAM role. The server and worker run as systemd services with automatic startup and restart, and their logs are collected by the CloudWatch Agent. CloudWatch also collects basic EC2 memory and disk metrics alongside standard EC2 CPU and status-check metrics.
 
-AWS infrastructure is managed through Terraform. Terraform manages the application security groups, EC2 instance, RDS instance, application S3 bucket, IAM role and permissions, CloudWatch log groups, CloudWatch alarms, and CloudWatch dashboard. Terraform uses an Amazon S3 backend for remote state with native state locking and imports the existing AWS infrastructure into Terraform state rather than creating duplicate resources.
+The current AWS deployment runs the Go server, Go worker, and Redis as Docker containers on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. RDS master credentials are managed through AWS Secrets Manager and retrieved using the EC2 IAM role. CloudWatch collects application logs and EC2 monitoring metrics.
+
+The production application image is built for ARM64 to match the t4g.micro EC2 instance and is published to Amazon ECR. The main branch deployment workflow uses GitHub OIDC to authenticate to AWS and AWS Systems Manager to update the EC2 deployment to the image associated with the triggering commit.
 
 `ProcessJob` retrieves the job from PostgreSQL, validates the shared job information, manages the common job lifecycle, applies processor timeouts, and dispatches the job to the appropriate processor based on its type. Persistent job inputs and configuration are retrieved through the object-storage abstraction and materialized into a temporary local workspace because the Python processors operate on filesystem paths.
 
@@ -810,11 +818,9 @@ Current job types:
 
 Additional job types and processors are planned for later iterations.
 
-AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The current deployment uses an EC2 instance running the Go HTTP server, Go worker, and Redis; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The deployment uses an ARM64 Docker image running the Go HTTP server, Go worker, and Redis on an EC2 instance; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
 
-Terraform uses remote state stored in Amazon S3 and manages the deployed AWS infrastructure. Existing infrastructure has been imported into Terraform state and verified with clean plans. Terraform resource creation and destruction were also validated using a disposable S3 resource without modifying the live application infrastructure.
-
-Remaining AWS deployment work includes HTTPS, domain configuration, and further production security hardening.
+GitHub Actions provides continuous integration, ARM64 image publication to Amazon ECR, Terraform pull-request planning, and automated EC2 deployment through AWS Systems Manager. GitHub OIDC is used for AWS authentication, with separate roles for Terraform planning, image publication, and deployment.
 
 Planned future work includes:
 
@@ -825,7 +831,7 @@ Planned future work includes:
 - additional job types and processors
 - further worker and processing abstractions where shared behavior warrants them
 - broader integration testing
-- additional AWS production hardening and deployment automation
+- additional AWS production hardening
 
 ---
 

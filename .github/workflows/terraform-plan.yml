@@ -2,9 +2,6 @@ name: Terraform Plan
 
 on:
   pull_request:
-    paths:
-      - "terraform/**"
-      - ".github/workflows/terraform-plan.yml"
 
 permissions:
   contents: read
