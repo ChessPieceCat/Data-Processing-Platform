@@ -9,8 +9,10 @@ import (
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -55,6 +57,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Create a new Prometheus registry.
+	metricsRegistry := prometheus.NewRegistry()
+	appMetrics := metrics.NewMetrics(metricsRegistry)
+
 	// Serve the index.html file.
 	tmpl, err := template.ParseFiles("web/index.html")
 	if err != nil {
@@ -73,6 +79,9 @@ func main() {
 		"/",
 		apphttp.IndexHandler(db, tmpl),
 	)
+
+	// Handle Prometheus metrics endpoint.
+	http.Handle("/metrics", metrics.Handler(metricsRegistry))
 
 	// Handle the results page.
 	http.HandleFunc(
@@ -130,6 +139,7 @@ func main() {
 			db,
 			redisClient,
 			store,
+			appMetrics,
 		),
 	)
 
@@ -139,6 +149,7 @@ func main() {
 			db,
 			redisClient,
 			store,
+			appMetrics,
 		),
 	)
 
@@ -148,6 +159,7 @@ func main() {
 			db,
 			redisClient,
 			store,
+			appMetrics,
 		),
 	)
 
@@ -157,6 +169,9 @@ func main() {
 	)
 
 	log.Fatal(
-		http.ListenAndServe(":8082", nil),
+		http.ListenAndServe(
+			":8082",
+			metrics.Middleware(appMetrics, http.DefaultServeMux),
+		),
 	)
 }

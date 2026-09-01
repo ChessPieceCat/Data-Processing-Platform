@@ -10,6 +10,8 @@ import (
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -168,7 +170,7 @@ func TestRecoverPendingCompletedJob(t *testing.T) {
 	)
 
 	processed := false
-
+	m := createTestMetrics()
 	recoverPendingJobs(
 		db,
 		redisClient,
@@ -178,6 +180,7 @@ func TestRecoverPendingCompletedJob(t *testing.T) {
 		},
 		"recovery-worker",
 		0,
+		m,
 	)
 
 	if processed {
@@ -217,7 +220,7 @@ func TestRecoverPendingFailedJob(t *testing.T) {
 	)
 
 	processed := false
-
+	m := createTestMetrics()
 	recoverPendingJobs(
 		db,
 		redisClient,
@@ -227,6 +230,7 @@ func TestRecoverPendingFailedJob(t *testing.T) {
 		},
 		"recovery-worker",
 		0,
+		m,
 	)
 
 	if processed {
@@ -267,6 +271,7 @@ func TestRecoverPendingQueuedJob(t *testing.T) {
 
 	var processedJobID int64
 
+	m := createTestMetrics()
 	recoverPendingJobs(
 		db,
 		redisClient,
@@ -285,6 +290,7 @@ func TestRecoverPendingQueuedJob(t *testing.T) {
 		},
 		"recovery-worker",
 		0,
+		m,
 	)
 
 	if processedJobID != jobID {
@@ -329,7 +335,7 @@ func TestRecoverPendingJobProcessingFailure(t *testing.T) {
 	)
 
 	processed := false
-
+	m := createTestMetrics()
 	recoverPendingJobs(
 		db,
 		redisClient,
@@ -342,6 +348,7 @@ func TestRecoverPendingJobProcessingFailure(t *testing.T) {
 		},
 		"recovery-worker",
 		0,
+		m,
 	)
 
 	if !processed {
@@ -397,12 +404,13 @@ func TestWorkersProcessJobsConcurrently(t *testing.T) {
 		<-release
 		return nil
 	}
-
+	m := createTestMetrics()
 	// Start both workers before enqueueing any jobs.
 	go func() {
 		defer workerWG.Done()
 
 		RunWorker(
+			m,
 			ctx,
 			db,
 			redisClient,
@@ -415,6 +423,7 @@ func TestWorkersProcessJobsConcurrently(t *testing.T) {
 		defer workerWG.Done()
 
 		RunWorker(
+			m,
 			ctx,
 			db,
 			redisClient,
@@ -811,8 +820,9 @@ func TestRunWorkerShutsDownWhenContextIsCancelled(t *testing.T) {
 
 	go func() {
 		defer close(workerDone)
-
+		m := createTestMetrics()
 		RunWorker(
+			m,
 			ctx,
 			db,
 			redisClient,
@@ -838,4 +848,9 @@ func TestRunWorkerShutsDownWhenContextIsCancelled(t *testing.T) {
 			"worker did not shut down after context cancellation",
 		)
 	}
+}
+
+func createTestMetrics() *metrics.Metrics {
+	registry := prometheus.NewRegistry()
+	return metrics.NewMetrics(registry)
 }

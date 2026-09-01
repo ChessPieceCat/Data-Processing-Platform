@@ -3,15 +3,19 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/redis"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/worker"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -47,14 +51,32 @@ func main() {
 		)
 	}
 
+	metricsRegistry := prometheus.NewRegistry()
+	appMetrics := metrics.NewMetrics(metricsRegistry)
+
 	// Define the job processing function.
 	processJob := func(jobID int64) error {
 		return jobs.ProcessJob(
 			db,
 			jobID,
 			store,
+			appMetrics,
 		)
 	}
+
+	metricsServer := &http.Server{
+		Addr:    "127.0.0.1:9091",
+		Handler: metrics.Handler(metricsRegistry),
+	}
+
+	go func() {
+		log.Printf("Worker metrics server listening on %s", metricsServer.Addr)
+
+		if err := metricsServer.ListenAndServe(); err != nil &&
+			err != http.ErrServerClosed {
+			log.Printf("Worker metrics server error: %v", err)
+		}
+	}()
 
 	// Use the container hostname as the Redis consumer name.
 	consumerName, err := os.Hostname()
@@ -82,6 +104,7 @@ func main() {
 		redisClient,
 		processJob,
 		consumerName,
+		appMetrics,
 	)
 
 	// Start consuming new jobs.
@@ -91,6 +114,7 @@ func main() {
 	)
 
 	worker.RunWorker(
+		appMetrics,
 		ctx,
 		db,
 		redisClient,
@@ -99,6 +123,17 @@ func main() {
 	)
 
 	// RunWorker returns after the context is cancelled.
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer shutdownCancel()
+
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Error shutting down metrics server: %v", err)
+	}
+
 	log.Printf(
 		"Worker %s shut down cleanly",
 		consumerName,

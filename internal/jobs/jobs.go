@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/redis/go-redis/v9"
 )
@@ -22,9 +23,47 @@ const MaxOutstandingJobs = 100
 
 var ErrJobQueueFull = errors.New("job queue is full")
 
+type errorCategory string
+
+const (
+	errorTimeout       errorCategory = "timeout"
+	errorCancelled     errorCategory = "cancelled"
+	errorProcessor     errorCategory = "processor"
+	errorValidation    errorCategory = "validation"
+	errorStorage       errorCategory = "storage"
+	errorFilesystem    errorCategory = "filesystem"
+	errorDatabase      errorCategory = "database"
+	errorConfiguration errorCategory = "configuration"
+	errorRetryLimit    errorCategory = "retry_limit"
+)
+
+type categorizedError struct {
+	category errorCategory
+	err      error
+}
+
+func (e *categorizedError) Error() string {
+	return e.err.Error()
+}
+
+func (e *categorizedError) Unwrap() error {
+	return e.err
+}
+
+func categorizeError(
+	category errorCategory,
+	err error,
+) error {
+	return &categorizedError{
+		category: category,
+		err:      err,
+	}
+}
+
 func CreateJobWithLimit(
 	db *sql.DB,
 	jobType string,
+	m *metrics.Metrics,
 ) (int64, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -73,6 +112,8 @@ func CreateJobWithLimit(
 		return 0, err
 	}
 
+	m.JobsSubmitted.WithLabelValues(jobType).Inc()
+
 	log.Printf(
 		"Created job %d of type %s",
 		jobID,
@@ -108,6 +149,7 @@ func ProcessJob(
 	db *sql.DB,
 	jobID int64,
 	store storage.Storage,
+	m *metrics.Metrics,
 ) error {
 	job, err := GetJob(
 		db,
@@ -129,11 +171,23 @@ func ProcessJob(
 	}
 
 	// Mark the job as processing.
+	start := time.Now()
+
+	defer func() {
+		m.JobProcessingDuration.
+			WithLabelValues(job.Type).
+			Observe(time.Since(start).Seconds())
+	}()
+
 	if err := startJob(
 		db,
 		jobID,
 	); err != nil {
 		return err
+	}
+
+	if err := UpdateQueueDepth(db, m); err != nil {
+		log.Printf("Error updating queue depth: %v", err)
 	}
 
 	workspace, err := prepareJobWorkspace(
@@ -145,7 +199,9 @@ func ProcessJob(
 		return failJob(
 			db,
 			jobID,
+			job.Type,
 			err,
+			m,
 		)
 	}
 
@@ -167,7 +223,9 @@ func ProcessJob(
 		return failJob(
 			db,
 			jobID,
+			job.Type,
 			err,
+			m,
 		)
 	}
 
@@ -182,14 +240,26 @@ func ProcessJob(
 		return failJob(
 			db,
 			jobID,
+			job.Type,
 			err,
+			m,
 		)
 	}
 
-	return completeJob(
+	if err := completeJob(
 		db,
 		jobID,
-	)
+	); err != nil {
+		return err
+	}
+
+	if err := UpdateQueueDepth(db, m); err != nil {
+		log.Printf("Error updating queue depth: %v", err)
+	}
+
+	m.JobsCompleted.WithLabelValues(job.Type).Inc()
+
+	return nil
 }
 
 func persistJobArtifacts(
@@ -202,9 +272,12 @@ func persistJobArtifacts(
 ) error {
 	resultData, err := os.ReadFile(localResultPath)
 	if err != nil {
-		return fmt.Errorf(
-			"failed to read processor result: %w",
-			err,
+		return categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to read processor result: %w",
+				err,
+			),
 		)
 	}
 
@@ -214,9 +287,12 @@ func persistJobArtifacts(
 		resultData,
 		&result,
 	); err != nil {
-		return fmt.Errorf(
-			"failed to decode processor result: %w",
-			err,
+		return categorizeError(
+			errorProcessor,
+			fmt.Errorf(
+				"failed to decode processor result: %w",
+				err,
+			),
 		)
 	}
 
@@ -250,9 +326,12 @@ func persistJobArtifacts(
 		"  ",
 	)
 	if err != nil {
-		return fmt.Errorf(
-			"failed to encode updated processor result: %w",
-			err,
+		return categorizeError(
+			errorProcessor,
+			fmt.Errorf(
+				"failed to encode updated processor result: %w",
+				err,
+			),
 		)
 	}
 
@@ -261,17 +340,23 @@ func persistJobArtifacts(
 		updatedResult,
 		0644,
 	); err != nil {
-		return fmt.Errorf(
-			"failed to write updated processor result: %w",
-			err,
+		return categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to write updated processor result: %w",
+				err,
+			),
 		)
 	}
 
 	resultFile, err := os.Open(localResultPath)
 	if err != nil {
-		return fmt.Errorf(
-			"failed to reopen processor result: %w",
-			err,
+		return categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to reopen processor result: %w",
+				err,
+			),
 		)
 	}
 	defer resultFile.Close()
@@ -286,9 +371,12 @@ func persistJobArtifacts(
 		resultKey,
 		resultFile,
 	); err != nil {
-		return fmt.Errorf(
-			"failed to store job result: %w",
-			err,
+		return categorizeError(
+			errorStorage,
+			fmt.Errorf(
+				"failed to store job result: %w",
+				err,
+			),
 		)
 	}
 
@@ -297,7 +385,13 @@ func persistJobArtifacts(
 		job.ID,
 		resultKey,
 	); err != nil {
-		return err
+		return categorizeError(
+			errorDatabase,
+			fmt.Errorf(
+				"failed to save result reference: %w",
+				err,
+			),
+		)
 	}
 
 	return nil
@@ -311,7 +405,13 @@ func uploadLocalFile(
 ) error {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return err
+		return categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to open local artifact: %w",
+				err,
+			),
+		)
 	}
 	defer file.Close()
 
@@ -320,7 +420,13 @@ func uploadLocalFile(
 		key,
 		file,
 	); err != nil {
-		return err
+		return categorizeError(
+			errorStorage,
+			fmt.Errorf(
+				"failed to upload artifact: %w",
+				err,
+			),
+		)
 	}
 
 	return nil
@@ -449,7 +555,13 @@ func persistModelResults(
 			return nil
 		}
 
-		return err
+		return categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to access model results: %w",
+				err,
+			),
+		)
 	}
 
 	key := fmt.Sprintf(
@@ -476,7 +588,9 @@ func persistModelResults(
 func failJob(
 	db *sql.DB,
 	jobID int64,
+	jobType string,
 	err error,
+	m *metrics.Metrics,
 ) error {
 	if failErr := FailJob(
 		db,
@@ -488,16 +602,53 @@ func failJob(
 			jobID,
 			failErr,
 		)
+	} else {
+		if err := UpdateQueueDepth(db, m); err != nil {
+			log.Printf(
+				"Error updating queue depth: %v",
+				err,
+			)
+		}
+
+		m.JobsFailed.
+			WithLabelValues(
+				jobType,
+				classifyError(err),
+			).
+			Inc()
 	}
 
 	return err
+}
+
+func classifyError(err error) string {
+	var categorized *categorizedError
+
+	if errors.As(err, &categorized) {
+		return string(categorized.category)
+	}
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	default:
+		return "unknown"
+	}
 }
 
 // findProcessor searches for the processor script for a given job type.
 func findProcessor(processorType string) (string, error) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return "", categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to determine working directory: %w",
+				err,
+			),
+		)
 	}
 
 	directory := workingDirectory
@@ -513,20 +664,26 @@ func findProcessor(processorType string) (string, error) {
 		if _, err := os.Stat(processorPath); err == nil {
 			return processorPath, nil
 		} else if !os.IsNotExist(err) {
-			return "", fmt.Errorf(
-				"failed to access processor for type %q: %w",
-				processorType,
-				err,
+			return "", categorizeError(
+				errorConfiguration,
+				fmt.Errorf(
+					"failed to access processor for type %q: %w",
+					processorType,
+					err,
+				),
 			)
 		}
 
 		parent := filepath.Dir(directory)
 
 		if parent == directory {
-			return "", fmt.Errorf(
-				"could not find processor for type %q from %s",
-				processorType,
-				workingDirectory,
+			return "", categorizeError(
+				errorConfiguration,
+				fmt.Errorf(
+					"could not find processor for type %q from %s",
+					processorType,
+					workingDirectory,
+				),
 			)
 		}
 
@@ -558,9 +715,12 @@ func runProcessor(
 		)
 
 		if _, err := os.Stat(distancePath); err != nil {
-			return "", fmt.Errorf(
-				"route distance file not found: %w",
-				err,
+			return "", categorizeError(
+				errorValidation,
+				fmt.Errorf(
+					"route distance file not found: %w",
+					err,
+				),
 			)
 		}
 
@@ -599,17 +759,21 @@ func runProcessor(
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return "", fmt.Errorf(
-			"%s processor timed out after 60 seconds",
+			"%s processor timed out after 60 seconds: %w",
 			processorType,
+			context.DeadlineExceeded,
 		)
 	}
 
 	if err != nil {
-		return "", fmt.Errorf(
-			"%s processor failed: %w: %s",
-			processorType,
-			err,
-			string(output),
+		return "", categorizeError(
+			errorProcessor,
+			fmt.Errorf(
+				"%s processor failed: %w: %s",
+				processorType,
+				err,
+				string(output),
+			),
 		)
 	}
 
@@ -941,9 +1105,12 @@ func prepareJobWorkspace(
 		fmt.Sprintf("job-%d-", job.ID),
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to create job workspace: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to create job workspace: %w",
+				err,
+			),
 		)
 	}
 
@@ -958,9 +1125,12 @@ func prepareJobWorkspace(
 	if err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to retrieve job input: %w",
-			err,
+		return nil, categorizeError(
+			errorStorage,
+			fmt.Errorf(
+				"failed to retrieve job input: %w",
+				err,
+			),
 		)
 	}
 	defer inputReader.Close()
@@ -974,9 +1144,12 @@ func prepareJobWorkspace(
 	if err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to create local input file: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to create local input file: %w",
+				err,
+			),
 		)
 	}
 
@@ -987,18 +1160,24 @@ func prepareJobWorkspace(
 		inputFile.Close()
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to download job input: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to download job input: %w",
+				err,
+			),
 		)
 	}
 
 	if err := inputFile.Close(); err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to close local input file: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to close local input file: %w",
+				err,
+			),
 		)
 	}
 
@@ -1014,9 +1193,12 @@ func prepareJobWorkspace(
 	if err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to retrieve job config: %w",
-			err,
+		return nil, categorizeError(
+			errorStorage,
+			fmt.Errorf(
+				"failed to retrieve job config: %w",
+				err,
+			),
 		)
 	}
 	defer configReader.Close()
@@ -1030,9 +1212,12 @@ func prepareJobWorkspace(
 	if err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to create local config file: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to create local config file: %w",
+				err,
+			),
 		)
 	}
 
@@ -1043,18 +1228,24 @@ func prepareJobWorkspace(
 		configFile.Close()
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to download job config: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to download job config: %w",
+				err,
+			),
 		)
 	}
 
 	if err := configFile.Close(); err != nil {
 		cleanup()
 
-		return nil, fmt.Errorf(
-			"failed to close local config file: %w",
-			err,
+		return nil, categorizeError(
+			errorFilesystem,
+			fmt.Errorf(
+				"failed to close local config file: %w",
+				err,
+			),
 		)
 	}
 
@@ -1077,9 +1268,12 @@ func prepareJobWorkspace(
 		if err != nil {
 			cleanup()
 
-			return nil, fmt.Errorf(
-				"failed to retrieve route distance table: %w",
-				err,
+			return nil, categorizeError(
+				errorStorage,
+				fmt.Errorf(
+					"failed to retrieve route distance table: %w",
+					err,
+				),
 			)
 		}
 		defer distanceReader.Close()
@@ -1093,9 +1287,12 @@ func prepareJobWorkspace(
 		if err != nil {
 			cleanup()
 
-			return nil, fmt.Errorf(
-				"failed to create local distance table: %w",
-				err,
+			return nil, categorizeError(
+				errorFilesystem,
+				fmt.Errorf(
+					"failed to create local distance table: %w",
+					err,
+				),
 			)
 		}
 
@@ -1106,18 +1303,24 @@ func prepareJobWorkspace(
 			distanceFile.Close()
 			cleanup()
 
-			return nil, fmt.Errorf(
-				"failed to download route distance table: %w",
-				err,
+			return nil, categorizeError(
+				errorFilesystem,
+				fmt.Errorf(
+					"failed to download route distance table: %w",
+					err,
+				),
 			)
 		}
 
 		if err := distanceFile.Close(); err != nil {
 			cleanup()
 
-			return nil, fmt.Errorf(
-				"failed to close local distance table: %w",
-				err,
+			return nil, categorizeError(
+				errorFilesystem,
+				fmt.Errorf(
+					"failed to close local distance table: %w",
+					err,
+				),
 			)
 		}
 
@@ -1132,4 +1335,60 @@ type JobWorkspace struct {
 	InputPath    string
 	DistancePath string
 	ConfigPath   string
+}
+
+func GetQueueDepth(db *sql.DB) (map[string]int, error) {
+	rows, err := db.Query(`
+        SELECT type, COUNT(*)
+        FROM jobs
+        WHERE status = 'queued'
+        GROUP BY type
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	depths := make(map[string]int)
+
+	for rows.Next() {
+		var jobType string
+		var count int
+
+		if err := rows.Scan(&jobType, &count); err != nil {
+			return nil, err
+		}
+
+		depths[jobType] = count
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return depths, nil
+}
+
+func UpdateQueueDepth(
+	db *sql.DB,
+	m *metrics.Metrics,
+) error {
+	depths, err := GetQueueDepth(db)
+	if err != nil {
+		return err
+	}
+
+	jobTypes := []string{
+		"dataset",
+		"image",
+		"route",
+	}
+
+	for _, jobType := range jobTypes {
+		m.QueueDepth.
+			WithLabelValues(jobType).
+			Set(float64(depths[jobType]))
+	}
+
+	return nil
 }
