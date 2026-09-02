@@ -16,20 +16,6 @@ import (
 // WorkerErrors
 // APiErrors
 
-// Register(...)
-
-// registry := prometheus.NewRegistry()
-
-// | Metric                            | Prometheus type | Labels                      | Meaning                                |
-// | --------------------------------- | --------------- | --------------------------- | -------------------------------------- |
-// | `jobs_submitted_total`            | Counter         | `job_type`                  | Jobs successfully submitted            |
-// | `jobs_completed_total`            | Counter         | `job_type`                  | Jobs successfully completed            |
-// | `jobs_failed_total`               | Counter         | `job_type`, `error_type`    | Jobs that ultimately failed            |
-// | `job_processing_duration_seconds` | Histogram       | `job_type`                  | Time spent processing a job            |
-// | `queue_depth`                     | Gauge           | `job_type`                  | Jobs currently waiting to be processed |
-// | `worker_errors_total`             | Counter         | `error_type`                | Worker-level errors                    |
-// | `api_errors_total`                | Counter         | `method`, `route`, `status` | API requests resulting in errors       |
-
 // Create metrics
 type Metrics struct {
 	JobsSubmitted         *prometheus.CounterVec
