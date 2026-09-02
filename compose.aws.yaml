@@ -2,6 +2,10 @@ services:
   app:
     image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:${IMAGE_TAG}
     command: ./server
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "8082"
+      prometheus.job: "app"
     ports:
       - "8084:8082"
     environment:
@@ -25,6 +29,10 @@ services:
   worker:
     image: 410126553529.dkr.ecr.us-east-2.amazonaws.com/data-processing-platform:${IMAGE_TAG}
     command: ./worker
+    labels:
+      prometheus.scrape: "true"
+      prometheus.job: "worker"
+      prometheus.port: "9091"
     environment:
       STORAGE_BACKEND: s3
       S3_BUCKET: data-processing-platform-chess
@@ -53,5 +61,29 @@ services:
       timeout: 3s
       retries: 10
 
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    user: "0:0"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - app
+      - worker
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
 volumes:
   redis_data:
+  prometheus_data:
+  grafana_data:

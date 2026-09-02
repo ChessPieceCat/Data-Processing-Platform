@@ -2,11 +2,17 @@ volumes:
   postgres_data:
   redis_data:
   uploads_data:
+  prometheus_data:
+  grafana_data:
 
 services:
   app:
     build: .
     command: ./server
+    labels:
+      prometheus.scrape: "true"
+      prometheus.port: "8082"
+      prometheus.job: "app"
     ports:
       - "8082:8082"
     environment:
@@ -17,6 +23,7 @@ services:
       DB_NAME: data_platform
       REDIS_ADDR: redis:6379
       PYTHON_BIN: /opt/venv/bin/python
+      DB_SSLMODE: disable
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -28,6 +35,10 @@ services:
   worker:
     build: .
     command: ./worker
+    labels:
+      prometheus.scrape: "true"
+      prometheus.job: "worker"
+      prometheus.port: "9091"
     environment:
       DB_HOST: db
       DB_PORT: 5432
@@ -36,6 +47,7 @@ services:
       DB_NAME: data_platform
       REDIS_ADDR: redis:6379
       PYTHON_BIN: /opt/venv/bin/python
+      DB_SSLMODE: disable
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -79,3 +91,26 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    group_add:
+      - "128"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - app
+      - worker
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus

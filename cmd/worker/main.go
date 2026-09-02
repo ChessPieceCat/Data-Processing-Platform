@@ -65,7 +65,7 @@ func main() {
 	}
 
 	metricsServer := &http.Server{
-		Addr:    "127.0.0.1:9091",
+		Addr:    ":9091",
 		Handler: metrics.Handler(metricsRegistry),
 	}
 
