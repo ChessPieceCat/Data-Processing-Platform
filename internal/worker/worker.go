@@ -71,7 +71,8 @@ func RunWorker(m *metrics.Metrics, ctx context.Context, db *sql.DB, redisClient 
 				ack := true
 				if err := processJob(jobID); err != nil {
 					log.Printf(
-						"Error processing job %d: %v",
+						"Worker %s: error processing job %d: %v",
+						consumerName,
 						jobID,
 						err,
 					)
@@ -215,6 +216,15 @@ func recoverPendingJobs(
 				maxJobAttempts,
 			)
 
+			log.Printf(
+				"Worker %s: job %d (%s) reached maximum attempts: attempt=%d max_attempts=%d",
+				consumerName,
+				jobID,
+				job.Type,
+				job.Attempts,
+				maxJobAttempts,
+			)
+
 			if err := jobs.FailJob(
 				db,
 				jobID,
@@ -255,11 +265,12 @@ func recoverPendingJobs(
 
 		if err := processJob(jobID); err != nil {
 			log.Printf(
-				"Error reprocessing job %d: %v",
+				"Worker %s: error reprocessing job %d (attempt %d): %v",
+				consumerName,
 				jobID,
+				job.Attempts,
 				err,
 			)
-
 			continue
 		}
 

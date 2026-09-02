@@ -257,6 +257,15 @@ func ProcessJob(
 		log.Printf("Error updating queue depth: %v", err)
 	}
 
+	duration := time.Since(start)
+
+	log.Printf(
+		"Job %d (%s) completed in %s",
+		jobID,
+		job.Type,
+		duration,
+	)
+
 	m.JobsCompleted.WithLabelValues(job.Type).Inc()
 
 	return nil
@@ -610,10 +619,20 @@ func failJob(
 			)
 		}
 
+		errorType := classifyError(err)
+
+		log.Printf(
+			"Job %d (%s) failed: error_type=%s error=%v",
+			jobID,
+			jobType,
+			errorType,
+			err,
+		)
+
 		m.JobsFailed.
 			WithLabelValues(
 				jobType,
-				classifyError(err),
+				errorType,
 			).
 			Inc()
 	}
