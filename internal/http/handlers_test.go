@@ -2207,3 +2207,155 @@ func createTestMetrics() *metrics.Metrics {
 	registry := prometheus.NewRegistry()
 	return metrics.NewMetrics(registry)
 }
+
+// TestValidateImageTypeAcceptsSupportedFormats verifies that supported image
+// content types are accepted.
+func TestValidateImageTypeAcceptsSupportedFormats(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "jpeg",
+			data: []byte{
+				0xff, 0xd8, 0xff, 0xe0,
+				0x00, 0x10, 'J', 'F', 'I', 'F',
+			},
+		},
+		{
+			name: "png",
+			data: []byte{
+				0x89, 'P', 'N', 'G',
+				0x0d, 0x0a, 0x1a, 0x0a,
+			},
+		},
+		{
+			name: "gif",
+			data: []byte("GIF89a"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file, err := os.CreateTemp("", "image-*")
+			if err != nil {
+				t.Fatalf("failed to create temporary file: %v", err)
+			}
+			t.Cleanup(func() {
+				os.Remove(file.Name())
+			})
+			t.Cleanup(func() {
+				file.Close()
+			})
+
+			if _, err := file.Write(tt.data); err != nil {
+				t.Fatalf("failed to write test image: %v", err)
+			}
+
+			if _, err := file.Seek(0, 0); err != nil {
+				t.Fatalf("failed to reset test file: %v", err)
+			}
+
+			if err := validateImageType(file); err != nil {
+				t.Fatalf("expected image type to be accepted: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateImageTypeAcceptsWebP verifies that valid WebP content is accepted.
+func TestValidateImageTypeAcceptsWebP(t *testing.T) {
+	data, err := os.ReadFile("testdata/test.webp")
+	if err != nil {
+		t.Fatalf("failed to read WebP fixture: %v", err)
+	}
+
+	file, err := os.CreateTemp("", "image-*")
+	if err != nil {
+		t.Fatalf("failed to create temporary file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		file.Close()
+		os.Remove(file.Name())
+	})
+
+	if _, err := file.Write(data); err != nil {
+		t.Fatalf("failed to write WebP fixture: %v", err)
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("failed to reset test file: %v", err)
+	}
+
+	if err := validateImageType(file); err != nil {
+		t.Fatalf("expected WebP to be accepted: %v", err)
+	}
+}
+
+// TestValidateImageTypeRejectsNonImage verifies that non-image content is rejected.
+func TestValidateImageTypeRejectsNonImage(t *testing.T) {
+	file, err := os.CreateTemp("", "image-*")
+	if err != nil {
+		t.Fatalf("failed to create temporary file: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Remove(file.Name())
+	})
+	t.Cleanup(func() {
+		file.Close()
+	})
+
+	if _, err := file.Write([]byte("this is not an image")); err != nil {
+		t.Fatalf("failed to write test data: %v", err)
+	}
+
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatalf("failed to reset test file: %v", err)
+	}
+
+	if err := validateImageType(file); err == nil {
+		t.Fatal("expected non-image content to be rejected")
+	}
+}
+
+// TestValidateImageTypeResetsFilePointer verifies that the file is positioned
+// at the beginning after validation.
+func TestValidateImageTypeResetsFilePointer(t *testing.T) {
+	file, err := os.CreateTemp("", "image-*")
+	if err != nil {
+		t.Fatalf("failed to create temporary file: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Remove(file.Name())
+	})
+	t.Cleanup(func() {
+		file.Close()
+	})
+
+	imageData := []byte{
+		0xff, 0xd8, 0xff, 0xe0,
+		0x00, 0x10, 'J', 'F', 'I', 'F',
+	}
+
+	if _, err := file.Write(imageData); err != nil {
+		t.Fatalf("failed to write test image: %v", err)
+	}
+
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatalf("failed to reset test file: %v", err)
+	}
+
+	if err := validateImageType(file); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	position, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatalf("failed to get file position: %v", err)
+	}
+
+	if position != 0 {
+		t.Fatalf("expected file position 0, got %d", position)
+	}
+}

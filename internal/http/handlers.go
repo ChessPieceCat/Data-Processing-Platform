@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1582,6 +1583,12 @@ func ImageUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the image type by reading the first few bytes.
+	if err := validateImageType(file); err != nil {
+		http.Error(w, "Unsupported image type.", http.StatusBadRequest)
+		return
+	}
+
 	// Create the temporary upload directory.
 	if err := os.MkdirAll(
 		temporaryUploadDirectory,
@@ -2465,4 +2472,29 @@ func ImageResultHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			)
 		}
 	}
+}
+
+func validateImageType(file multipart.File) error {
+	// Read the first 512 bytes to detect the content type.
+	buffer := make([]byte, 512)
+
+	if _, err := file.Read(buffer); err != nil {
+		return fmt.Errorf("failed to read image file: %w", err)
+	}
+
+	contentType := http.DetectContentType(buffer)
+
+	switch contentType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		// Supported image format.
+	default:
+		return fmt.Errorf("unsupported image content type: %s", contentType)
+	}
+
+	// Reset the file pointer to the beginning for further processing.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to reset file pointer: %w", err)
+	}
+
+	return nil
 }
