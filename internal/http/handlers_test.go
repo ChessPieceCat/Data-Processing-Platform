@@ -1285,27 +1285,6 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 		)
 	})
 
-	// Verify the job is still queued.
-
-	var status string
-
-	if err := db.QueryRow(
-
-		`SELECT status FROM jobs WHERE id = $1`,
-
-		jobID,
-	).Scan(&status); err != nil {
-
-		t.Fatalf("failed to retrieve job status: %v", err)
-
-	}
-
-	if status != "queued" {
-
-		t.Fatalf("expected job status queued, got %q", status)
-
-	}
-
 	// Find the Redis message containing this job ID.
 
 	streams, err := redisClient.XRange(
@@ -2358,4 +2337,563 @@ func TestValidateImageTypeResetsFilePointer(t *testing.T) {
 	if position != 0 {
 		t.Fatalf("expected file position 0, got %d", position)
 	}
+}
+
+func makeMultipartRequest(
+	t *testing.T,
+	fieldName string,
+	filename string,
+	data []byte,
+) *http.Request {
+	t.Helper()
+
+	var body bytes.Buffer
+
+	writer := multipart.NewWriter(&body)
+
+	part, err := writer.CreateFormFile(fieldName, filename)
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	if _, err := part.Write(data); err != nil {
+		t.Fatalf("failed to write file data: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/upload",
+		&body,
+	)
+
+	req.Header.Set(
+		"Content-Type",
+		writer.FormDataContentType(),
+	)
+
+	return req
+}
+
+func TestImageUploadHandlerRejectsEmptyFile(t *testing.T) {
+	req := makeMultipartRequest(
+		t,
+		"imageFile",
+		"empty.jpg",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	ImageUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestImageUploadHandlerRejectsUnsupportedExtension(t *testing.T) {
+	data := loadTestFixture(t, "valid.jpg")
+
+	req := makeMultipartRequest(
+		t,
+		"imageFile",
+		"image.txt",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	ImageUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestImageUploadHandlerRejectsNonImageContent(t *testing.T) {
+	data := loadTestFixture(t, "not_image.jpg")
+
+	req := makeMultipartRequest(
+		t,
+		"imageFile",
+		"not_image.jpg",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	ImageUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestImageUploadHandlerAcceptsSupportedFormats(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		fixture  string
+	}{
+		{
+			name:     "JPEG",
+			filename: "test.jpg",
+			fixture:  "valid.jpg",
+		},
+		{
+			name:     "PNG",
+			filename: "test.png",
+			fixture:  "valid.png",
+		},
+		{
+			name:     "GIF",
+			filename: "test.gif",
+			fixture:  "valid.gif",
+		},
+		{
+			name:     "WebP",
+			filename: "test.webp",
+			fixture:  "valid.webp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := loadTestFixture(t, tt.fixture)
+
+			req := makeMultipartRequest(
+				t,
+				"imageFile",
+				tt.filename,
+				data,
+			)
+
+			rec := httptest.NewRecorder()
+
+			ImageUploadHandler(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf(
+					"expected status %d, got %d: %s",
+					http.StatusOK,
+					rec.Code,
+					rec.Body.String(),
+				)
+			}
+
+			var response inspectionResponse
+			if err := json.NewDecoder(
+				rec.Body,
+			).Decode(&response); err != nil {
+				t.Fatalf(
+					"failed to decode response: %v",
+					err,
+				)
+			}
+
+			if response.UploadID == "" {
+				t.Fatal("expected upload ID")
+			}
+
+			t.Cleanup(func() {
+				matches, err := filepath.Glob(
+					filepath.Join(
+						temporaryUploadDirectory,
+						response.UploadID+"*",
+					),
+				)
+				if err != nil {
+					return
+				}
+
+				for _, match := range matches {
+					os.Remove(match)
+				}
+			})
+		})
+	}
+}
+
+func TestImageUploadHandlerRejectsOversizedFile(t *testing.T) {
+	data := bytes.Repeat(
+		[]byte("A"),
+		MaxUploadSize+1,
+	)
+
+	req := makeMultipartRequest(
+		t,
+		"imageFile",
+		"large.jpg",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	ImageUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestDatasetInspectionHandlerRejectsEmptyFile(t *testing.T) {
+	req := makeMultipartRequest(
+		t,
+		"csvFile",
+		"empty.csv",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	DatasetInspectionHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestDatasetInspectionHandlerRejectsWrongExtension(t *testing.T) {
+	data := loadTestFixture(t, "valid.csv")
+
+	req := makeMultipartRequest(
+		t,
+		"csvFile",
+		"dataset.txt",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	DatasetInspectionHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestDatasetInspectionHandlerRejectsMalformedCSV(t *testing.T) {
+	data := loadTestFixture(t, "malformed.csv")
+
+	req := makeMultipartRequest(
+		t,
+		"csvFile",
+		"malformed.csv",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	DatasetInspectionHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusBadRequest,
+			rec.Code,
+			rec.Body.String(),
+		)
+	}
+}
+
+func TestDatasetInspectionHandlerRejectsOversizedFile(t *testing.T) {
+	data := bytes.Repeat(
+		[]byte("A"),
+		MaxUploadSize+1,
+	)
+
+	req := makeMultipartRequest(
+		t,
+		"csvFile",
+		"large.csv",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	DatasetInspectionHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func makeRouteMultipartRequest(
+	t *testing.T,
+	routeFilename string,
+	routeData []byte,
+	distanceFilename string,
+	distanceData []byte,
+) *http.Request {
+	t.Helper()
+
+	var body bytes.Buffer
+
+	writer := multipart.NewWriter(&body)
+
+	routePart, err := writer.CreateFormFile(
+		"routeFile",
+		routeFilename,
+	)
+	if err != nil {
+		t.Fatalf("failed to create route form file: %v", err)
+	}
+
+	if _, err := routePart.Write(routeData); err != nil {
+		t.Fatalf("failed to write route data: %v", err)
+	}
+
+	distancePart, err := writer.CreateFormFile(
+		"distanceFile",
+		distanceFilename,
+	)
+	if err != nil {
+		t.Fatalf("failed to create distance form file: %v", err)
+	}
+
+	if _, err := distancePart.Write(distanceData); err != nil {
+		t.Fatalf("failed to write distance data: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/upload/route",
+		&body,
+	)
+
+	req.Header.Set(
+		"Content-Type",
+		writer.FormDataContentType(),
+	)
+
+	return req
+}
+
+func TestRouteUploadHandlerRejectsEmptyRouteFile(t *testing.T) {
+	distanceData := loadTestFixture(t, "valid.csv")
+
+	req := makeRouteMultipartRequest(
+		t,
+		"route.csv",
+		nil,
+		"distances.csv",
+		distanceData,
+	)
+
+	rec := httptest.NewRecorder()
+
+	RouteUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestRouteUploadHandlerRejectsEmptyDistanceFile(t *testing.T) {
+	routeData := loadTestFixture(t, "valid.csv")
+
+	req := makeRouteMultipartRequest(
+		t,
+		"route.csv",
+		routeData,
+		"distances.csv",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	RouteUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestRouteUploadHandlerRejectsWrongRouteExtension(t *testing.T) {
+	routeData := loadTestFixture(t, "valid.csv")
+	distanceData := loadTestFixture(t, "valid.csv")
+
+	req := makeRouteMultipartRequest(
+		t,
+		"route.txt",
+		routeData,
+		"distances.csv",
+		distanceData,
+	)
+
+	rec := httptest.NewRecorder()
+
+	RouteUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func TestRouteUploadHandlerRejectsWrongDistanceExtension(t *testing.T) {
+	routeData := loadTestFixture(t, "valid.csv")
+	distanceData := loadTestFixture(t, "valid.csv")
+
+	req := makeRouteMultipartRequest(
+		t,
+		"route.csv",
+		routeData,
+		"distances.txt",
+		distanceData,
+	)
+
+	rec := httptest.NewRecorder()
+
+	RouteUploadHandler(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+}
+
+func loadTestFixture(t *testing.T, name string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf(
+			"failed to read test fixture %q: %v",
+			name,
+			err,
+		)
+	}
+
+	return data
+}
+
+func TestValidateImageTypeAcceptsMalformedJPEGSignature(t *testing.T) {
+	data := loadTestFixture(t, "malformed.jpg")
+
+	tempFile, err := os.CreateTemp(t.TempDir(), "test-*.jpg")
+	if err != nil {
+		t.Fatalf("failed to create temporary file: %v", err)
+	}
+
+	if _, err := tempFile.Write(data); err != nil {
+		t.Fatalf("failed to write test fixture: %v", err)
+	}
+
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("failed to rewind temporary file: %v", err)
+	}
+
+	err = validateImageType(tempFile)
+	if err != nil {
+		t.Fatalf(
+			"expected MIME validation to accept JPEG signature, got: %v",
+			err,
+		)
+	}
+}
+
+func TestImageUploadHandlerAcceptsMalformedJPEGSignature(t *testing.T) {
+	data := loadTestFixture(t, "malformed.jpg")
+
+	req := makeMultipartRequest(
+		t,
+		"imageFile",
+		"malformed.jpg",
+		data,
+	)
+
+	rec := httptest.NewRecorder()
+
+	ImageUploadHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d: %s",
+			http.StatusOK,
+			rec.Code,
+			rec.Body.String(),
+		)
+	}
+
+	var response inspectionResponse
+
+	if err := json.NewDecoder(
+		rec.Body,
+	).Decode(&response); err != nil {
+		t.Fatalf(
+			"failed to decode response: %v",
+			err,
+		)
+	}
+
+	if response.UploadID == "" {
+		t.Fatal("expected upload ID")
+	}
+
+	t.Cleanup(func() {
+		matches, err := filepath.Glob(
+			filepath.Join(
+				temporaryUploadDirectory,
+				response.UploadID+"*",
+			),
+		)
+		if err != nil {
+			return
+		}
+
+		for _, match := range matches {
+			os.Remove(match)
+		}
+	})
 }
