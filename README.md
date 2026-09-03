@@ -47,6 +47,10 @@ The current implementation supports:
 - Systemd services for automatic API and worker startup and restart
 - CloudWatch logging for API and worker services
 - CloudWatch monitoring for EC2 CPU, memory, disk usage, and status checks
+- Prometheus metrics for application, worker, queue, latency, and API error monitoring
+- Prometheus Docker service discovery for application and worker containers
+- Grafana monitoring dashboard
+- Version-controlled Grafana datasource and dashboard provisioning
 - Terraform infrastructure as code for AWS resources
 - Terraform-managed AWS provider, networking references, security groups, EC2, RDS, S3, IAM, and CloudWatch resources
 - Terraform remote state stored in Amazon S3 with state locking
@@ -165,9 +169,29 @@ The Go HTTP server exposes its metrics through the `/metrics` endpoint. The work
 
 Application and worker errors are classified into controlled error types for use as Prometheus labels rather than using raw error messages or job-specific values. This keeps metric cardinality bounded while still allowing failures to be analyzed by category.
 
+#### Monitoring Stack
+
+Prometheus collects metrics from the Go HTTP server and each worker replica. Docker service discovery automatically discovers containers labeled for monitoring, allowing worker replicas to be added or removed without changing the Prometheus configuration.
+
+Grafana provides the monitoring dashboard and uses Prometheus as its datasource. The datasource and dashboard are provisioned from version-controlled files in the repository so the monitoring configuration can be recreated automatically during deployment.
+
+The current dashboard includes:
+
+- job processing throughput
+
+- job failure rate
+
+- queue depth by job type
+
+- p95 processing time by job type
+
+- worker errors
+
+- API errors
+
 #### Observability Roadmap
 
-The current observability implementation provides application-level Prometheus instrumentation for job and worker behavior. Prometheus collection, dashboards, and additional structured logging are planned as subsequent monitoring work.
+The current observability implementation provides Prometheus instrumentation, automatic metric collection, Grafana dashboards, and contextual application and worker logging. Additional alerting, dashboard refinement, and production observability hardening are planned for later iterations.
 
 ### Platform
 
@@ -227,6 +251,13 @@ EC2 Docker Compose
     |
     +---- Amazon S3
     |
+    +---- Prometheus
+    |   |
+    |   +---- Go HTTP server metrics
+    |   |
+    |   +---- Worker metrics
+    |   |
+    |   +---- Grafana dashboard
     v
 ProcessJob
     |
@@ -243,7 +274,7 @@ The application and worker are separate processes:
 - **Redis** transports job IDs asynchronously between the application and worker.
 - The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
 
-The current AWS deployment runs the Go server, Go worker, and Redis as Docker containers on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. RDS master credentials are managed through AWS Secrets Manager and retrieved using the EC2 IAM role. CloudWatch collects application logs and EC2 monitoring metrics.
+The current AWS deployment runs the Go server, Go worker, Redis, Prometheus, and Grafana as Docker containers on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. Prometheus discovers the application and worker containers through the Docker socket and scrapes their `/metrics` endpoints. Grafana uses Prometheus as its datasource and loads its dashboard and datasource configuration from version-controlled provisioning files. RDS master credentials are managed through AWS Secrets Manager and retrieved using the EC2 IAM role. CloudWatch collects application logs and EC2 monitoring metrics.
 
 The production application image is built for ARM64 to match the t4g.micro EC2 instance and is published to Amazon ECR. The main branch deployment workflow uses GitHub OIDC to authenticate to AWS and AWS Systems Manager to update the EC2 deployment to the image associated with the triggering commit.
 
@@ -309,6 +340,16 @@ internal/worker/
 internal/storage/
 
     Object-storage abstraction and implementations
+
+monitoring/
+
+    Prometheus configuration
+
+    Grafana datasource provisioning
+
+    Grafana dashboard provisioning
+
+    Data Processing Platform dashboard
 
 terraform/
 
@@ -434,7 +475,7 @@ Amazon S3 is optional for local development. The application defaults to local f
 
 The route processor uses only Python standard-library modules and therefore does **not** require a `processors/route/requirements.txt` file.
 
-For containerized development, the repository includes a Docker Compose configuration with PostgreSQL, Redis, pgAdmin, the application server, and the worker. The application image installs Python and the dataset/image dependencies into `/opt/venv`.
+For containerized development, the repository includes a Docker Compose configuration with PostgreSQL, Redis, pgAdmin, the application server, the worker pool, Prometheus, and Grafana. The application image installs Python and the dataset/image dependencies into `/opt/venv`.
 
 ---
 
@@ -532,6 +573,8 @@ The Compose environment includes:
 - `db` — PostgreSQL
 - `redis` — Redis
 - `pgadmin` — pgAdmin
+- `prometheus` — Prometheus metrics collection and time-series storage
+- `grafana` — Grafana monitoring dashboard
 
 The default Compose configuration runs three worker replicas. Worker replicas share the same Redis consumer group while using unique consumer names derived from their container hostnames.
 
@@ -542,6 +585,10 @@ docker compose up -d --scale worker=5
 ```
 
 The worker pool can therefore be scaled independently from the HTTP server.
+
+Prometheus uses Docker service discovery to discover the application and worker containers. Worker replicas expose their own metrics endpoints, so scaling the worker service automatically adds or removes Prometheus targets without requiring changes to the Prometheus configuration.
+
+Grafana connects to Prometheus through the Compose service name and loads the Data Processing Platform dashboard from the repository's provisioning files.
 
 The application and worker use the Compose service names for PostgreSQL and Redis. Local Docker development uses the filesystem-backed object-storage implementation with the existing `uploads/` storage directory and shared `uploads_data` volume.
 
@@ -557,6 +604,12 @@ pgAdmin is available at:
 
 ```text
 http://localhost:8083
+```
+
+Grafana is available at:
+
+```text
+http://localhost:3000
 ```
 
 The Docker image installs Python processor dependencies in `/opt/venv`. The `PYTHON_BIN` environment variable is used to select the processor interpreter inside the container.
@@ -652,6 +705,8 @@ The benchmark produced the following results on the development system:
 | 3 | 29.6 jobs/sec | 466 ms | 567 ms |
 
 Processing latency remained approximately 100 ms across all configurations. Increasing the worker count therefore increased throughput while reducing queue and total job latency.
+
+The containerized monitoring stack has also been validated by confirming that Prometheus discovers the application and all configured worker replicas and reports healthy scrapes.
 
 The GitHub Actions workflow runs the Go tests, all three Python test suites, and builds both `cmd/server` and `cmd/worker`.
 
@@ -867,6 +922,7 @@ Planned future work includes:
 - further worker and processing abstractions where shared behavior warrants them
 - broader integration testing
 - additional AWS production hardening
+- additional monitoring dashboards, alerting, and production observability hardening
 
 ---
 
