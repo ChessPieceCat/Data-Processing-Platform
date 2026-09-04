@@ -2415,3 +2415,148 @@ func TestGetJobForOwnerRejectsDifferentOwner(t *testing.T) {
 		)
 	}
 }
+
+func TestDeleteOldJobsPerOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+
+	ownerOne := createTestOwner(t, db)
+	ownerTwo := createTestOwner(t, db)
+
+	var ownerOneJobs []int64
+	var ownerTwoJobs []int64
+
+	for i := 0; i < 11; i++ {
+		jobID := createTestJob(t, db, ownerOne)
+		ownerOneJobs = append(ownerOneJobs, jobID)
+
+		time.Sleep(time.Millisecond)
+	}
+
+	for i := 0; i < 11; i++ {
+		jobID := createTestJob(t, db, ownerTwo)
+		ownerTwoJobs = append(ownerTwoJobs, jobID)
+
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := DeleteOldJobs(db, 10, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	for i, jobID := range ownerOneJobs {
+		var exists bool
+
+		err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM jobs WHERE id = $1)`,
+			jobID,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("failed to check owner one job %d: %v", jobID, err)
+		}
+
+		if i == 0 {
+			if exists {
+				t.Fatalf("expected oldest owner one job %d to be deleted", jobID)
+			}
+		} else if !exists {
+			t.Fatalf("expected owner one job %d to be retained", jobID)
+		}
+	}
+
+	for i, jobID := range ownerTwoJobs {
+		var exists bool
+
+		err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM jobs WHERE id = $1)`,
+			jobID,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("failed to check owner two job %d: %v", jobID, err)
+		}
+
+		if i == 0 {
+			if exists {
+				t.Fatalf("expected oldest owner two job %d to be deleted", jobID)
+			}
+		} else if !exists {
+			t.Fatalf("expected owner two job %d to be retained", jobID)
+		}
+	}
+}
+
+func TestDeleteOldJobsKeepsJobsWithinLimit(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+
+	owner := createTestOwner(t, db)
+
+	for i := 0; i < 10; i++ {
+		createTestJob(t, db, owner)
+	}
+
+	if err := DeleteOldJobs(db, 10, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	jobList, err := GetJobs(db, owner)
+	if err != nil {
+		t.Fatalf("GetJobs failed: %v", err)
+	}
+
+	if len(jobList) != 10 {
+		t.Fatalf("expected 10 jobs to remain, got %d", len(jobList))
+	}
+}
+
+func TestDeleteOldJobsDeletesAssociatedStorage(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
+
+	// Create the job that should become old.
+	oldJobID := createTestJob(t, db, owner)
+
+	// Create some storage objects belonging to that job.
+	oldJobPrefix := fmt.Sprintf("jobs/%d/", oldJobID)
+
+	object1 := oldJobPrefix + "input.csv"
+	object2 := oldJobPrefix + "result.json"
+
+	if err := store.Put(context.Background(), object1, strings.NewReader("test input")); err != nil {
+		t.Fatalf("failed to create first storage object: %v", err)
+	}
+
+	if err := store.Put(context.Background(), object2, strings.NewReader("test result")); err != nil {
+		t.Fatalf("failed to create second storage object: %v", err)
+	}
+
+	// Create a newer job so the old job falls outside the retention limit.
+	createTestJob(t, db, owner)
+
+	if err := DeleteOldJobs(db, 1, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	// Verify the old job was deleted from the database.
+	if _, err := GetJob(db, oldJobID); err == nil {
+		t.Fatal("expected old job to be deleted")
+	}
+
+	// Verify all associated storage objects were deleted.
+	exists, err := store.Exists(context.Background(), object1)
+	if err != nil {
+		t.Fatalf("failed checking first storage object: %v", err)
+	}
+	if exists {
+		t.Fatal("expected first storage object to be deleted")
+	}
+
+	exists, err = store.Exists(context.Background(), object2)
+	if err != nil {
+		t.Fatalf("failed checking second storage object: %v", err)
+	}
+	if exists {
+		t.Fatal("expected second storage object to be deleted")
+	}
+}

@@ -1137,14 +1137,23 @@ func DeleteJob(
 
 func DeleteOldJobs(db *sql.DB, keep int, store storage.Storage) error {
 	rows, err := db.Query(`
-        SELECT id
-        FROM jobs
-        ORDER BY created_at DESC
-        OFFSET $1
-    `, keep)
+		SELECT id
+		FROM (
+			SELECT
+				id,
+				ROW_NUMBER() OVER (
+					PARTITION BY user_id, session_id
+					ORDER BY created_at DESC, id DESC
+				) AS job_number
+			FROM jobs
+		) ranked_jobs
+		WHERE job_number > $1
+	`, keep)
+
 	if err != nil {
 		return err
 	}
+
 	defer rows.Close()
 
 	var oldJobIDs []int64
