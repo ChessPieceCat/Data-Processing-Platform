@@ -16,3 +16,4 @@ terraform.tfvars
 tfplan
 METRICS.md
 apisecurity.md
+apisecuritychecklist.md
