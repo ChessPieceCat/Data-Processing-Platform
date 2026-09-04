@@ -33,6 +33,7 @@ import (
 
 	"testing"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/auth"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
@@ -1227,6 +1228,21 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 
 	store := storage.NewLocalStorage(t.TempDir())
 	metrics := createTestMetrics()
+
+	sessionToken, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate test session token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+		t.Fatalf("failed to store test guest session: %v", err)
+	}
+
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionToken,
+	})
+
 	handler := DatasetSubmissionHandler(
 		db,
 		redisClient,
@@ -1234,7 +1250,12 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 		metrics,
 	)
 
-	handler(rec, req)
+	wrappedHandler := auth.SessionMiddleware(
+		db,
+		handler,
+	)
+
+	wrappedHandler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 
@@ -1255,7 +1276,7 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 
 	var jobID int64
 
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 
         SELECT id
 
@@ -1910,6 +1931,21 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 
 	store := storage.NewLocalStorage(t.TempDir())
 	metrics := createTestMetrics()
+
+	sessionToken, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate test session token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+		t.Fatalf("failed to store test guest session: %v", err)
+	}
+
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionToken,
+	})
+
 	handler := ImageSubmissionHandler(
 		db,
 		redisClient,
@@ -1917,7 +1953,12 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 		metrics,
 	)
 
-	handler(rec, req)
+	wrappedHandler := auth.SessionMiddleware(
+		db,
+		handler,
+	)
+
+	wrappedHandler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 
@@ -1934,7 +1975,7 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 
 	var jobID int64
 
-	err := db.QueryRow(`
+	err = db.QueryRow(`
 
         SELECT id
 

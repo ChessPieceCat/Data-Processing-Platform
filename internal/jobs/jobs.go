@@ -19,6 +19,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+type JobOwner struct {
+	UserID    *int64
+	SessionID *int64
+}
+
 const MaxOutstandingJobs = 100
 
 var ErrJobQueueFull = errors.New("job queue is full")
@@ -64,6 +69,7 @@ func CreateJobWithLimit(
 	db *sql.DB,
 	jobType string,
 	m *metrics.Metrics,
+	owner JobOwner,
 ) (int64, error) {
 	tx, err := db.Begin()
 	if err != nil {
@@ -98,12 +104,14 @@ func CreateJobWithLimit(
 	var jobID int64
 
 	if err := tx.QueryRow(
-		`INSERT INTO jobs (type, status, created_at)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO jobs (type, status, created_at, user_id, session_id)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
 		jobType,
 		"queued",
 		time.Now(),
+		owner.UserID,
+		owner.SessionID,
 	).Scan(&jobID); err != nil {
 		return 0, err
 	}
@@ -124,16 +132,19 @@ func CreateJobWithLimit(
 }
 
 // CreateJob creates a new job and returns its database-generated ID.
-func CreateJob(db *sql.DB, jobType string) (int64, error) {
+func CreateJob(db *sql.DB, jobType string, owner JobOwner) (int64, error) {
+
 	var id int64
 
 	err := db.QueryRow(
-		`INSERT INTO jobs (type, status, created_at)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO jobs (type, status, created_at, user_id, session_id)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
 		jobType,
 		"queued",
 		time.Now(),
+		owner.UserID,
+		owner.SessionID,
 	).Scan(&id)
 
 	if err != nil {
@@ -896,6 +907,8 @@ type Job struct {
 	ErrorMessage    *string
 	ResultReference *string
 	InputReference  *string
+	UserID          *int64
+	SessionID       *int64
 }
 
 func GetJobs(db *sql.DB) ([]Job, error) {

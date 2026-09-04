@@ -3,6 +3,7 @@ package auth
 import (
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -437,13 +438,17 @@ func TestSessionMiddlewareAuthenticatedSession(t *testing.T) {
 	}
 
 	var userID int64
+	username := fmt.Sprintf(
+		"middleware_test_user_%d",
+		time.Now().UnixNano(),
+	)
 
 	err := db.QueryRow(`
 		INSERT INTO users (username, password_hash, created_at)
 		VALUES ($1, $2, $3)
 		RETURNING id
 	`,
-		"middleware_test_user",
+		username,
 		"test-password-hash",
 		time.Now(),
 	).Scan(&userID)

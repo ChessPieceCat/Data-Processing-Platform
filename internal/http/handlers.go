@@ -301,11 +301,13 @@ func prepareJob(
 	sourcePath string,
 	filename string,
 	m *metrics.Metrics,
+	owner jobs.JobOwner,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		jobType,
 		m,
+		owner,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -391,11 +393,13 @@ func prepareRouteJob(
 	routeTempPath string,
 	distanceTempPath string,
 	m *metrics.Metrics,
+	owner jobs.JobOwner,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		"route",
 		m,
+		owner,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -612,6 +616,21 @@ func RouteSubmissionHandler(
 			return
 		}
 
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
 		uploadID := r.FormValue("uploadID")
 
 		routeTempPath, distanceTempPath, err :=
@@ -668,6 +687,7 @@ func RouteSubmissionHandler(
 			routeTempPath,
 			distanceTempPath,
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(
@@ -755,6 +775,21 @@ func DatasetSubmissionHandler(
 			return
 		}
 
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
 		uploadID := r.FormValue("uploadID")
 
 		tempPath, err := getTemporaryDataset(
@@ -812,6 +847,7 @@ func DatasetSubmissionHandler(
 			tempPath,
 			"dataset.csv",
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(
@@ -899,6 +935,21 @@ func ImageSubmissionHandler(
 			return
 		}
 
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
 		uploadID := r.FormValue("uploadID")
 
 		tempPath, err := getTemporaryImage(
@@ -956,6 +1007,7 @@ func ImageSubmissionHandler(
 			tempPath,
 			"input"+filepath.Ext(tempPath),
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(

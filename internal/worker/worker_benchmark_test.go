@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"sync"
@@ -468,9 +469,34 @@ func createBenchmarkJob(
 ) int64 {
 	b.Helper()
 
+	token := fmt.Sprintf("benchmark-session-%d", time.Now().UnixNano())
+
+	var sessionID int64
+	err := db.QueryRow(`
+		INSERT INTO sessions (token, created_at, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`,
+		token,
+		time.Now(),
+		time.Now().Add(24*time.Hour),
+	).Scan(&sessionID)
+
+	if err != nil {
+		b.Fatalf(
+			"failed to create benchmark session: %v",
+			err,
+		)
+	}
+
+	owner := jobs.JobOwner{
+		SessionID: &sessionID,
+	}
+
 	jobID, err := jobs.CreateJob(
 		db,
 		"dataset",
+		owner,
 	)
 	if err != nil {
 		b.Fatalf(

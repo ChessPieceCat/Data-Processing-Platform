@@ -114,30 +114,27 @@ func clearJobsTable(t *testing.T, db *sql.DB) {
 // createTestJob creates a dataset job and registers cleanup for the database row.*
 
 func createTestJob(t *testing.T, db *sql.DB) int64 {
-
 	t.Helper()
 
-	jobID, err := CreateJob(db, "dataset")
+	owner := createTestOwner(t, db)
 
+	jobID, err := CreateJob(
+		db,
+		"dataset",
+		owner,
+	)
 	if err != nil {
-
 		t.Fatalf("CreateJob failed: %v", err)
-
 	}
 
 	t.Cleanup(func() {
-
 		_, _ = db.Exec(
-
 			"DELETE FROM jobs WHERE id = $1",
-
 			jobID,
 		)
-
 	})
 
 	return jobID
-
 }
 
 // TestCreateJob verifies that a new job is created with the expected*
@@ -1024,10 +1021,12 @@ func TestProcessJobSuccess(t *testing.T) {
 func TestProcessImageJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
 
 	jobID, err := CreateJob(
 		db,
 		"image",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf("CreateJob failed: %v", err)
@@ -1536,10 +1535,12 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 func TestCreateRouteJob(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
 
 	jobID, err := CreateJob(
 		db,
 		"route",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -1645,9 +1646,12 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
 
+	owner := createTestOwner(t, db)
+
 	jobID, err := CreateJob(
 		db,
 		"route",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -1982,12 +1986,15 @@ func TestCreateJobWithLimit(t *testing.T) {
 
 	clearJobsTable(t, db)
 
+	owner := createTestOwner(t, db)
+
 	for i := 0; i < MaxOutstandingJobs; i++ {
 		m := createTestMetrics()
 		if _, err := CreateJobWithLimit(
 			db,
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2009,6 +2016,7 @@ func TestCreateJobWithLimit(t *testing.T) {
 
 		"dataset",
 		m,
+		owner,
 	); !errors.Is(err, ErrJobQueueFull) {
 
 		t.Fatalf(
@@ -2029,7 +2037,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 ) {
 
 	db := setupTestDatabase(t)
-
+	owner := createTestOwner(t, db)
 	clearJobsTable(t, db)
 	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs; i++ {
@@ -2040,6 +2048,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2088,6 +2097,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 
 		"dataset",
 		m,
+		owner,
 	); err != nil {
 
 		t.Fatalf(
@@ -2112,13 +2122,14 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 	clearJobsTable(t, db)
 	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs-1; i++ {
-
+		owner := createTestOwner(t, db)
 		if _, err := CreateJobWithLimit(
 
 			db,
 
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2141,7 +2152,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 	results := make(chan error, 2)
 
 	for i := 0; i < 2; i++ {
-
+		owner := createTestOwner(t, db)
 		go func() {
 
 			defer wg.Done()
@@ -2152,6 +2163,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 
 				"dataset",
 				m,
+				owner,
 			)
 
 			results <- err
@@ -2324,5 +2336,37 @@ func TestClassifyError(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func createTestOwner(t *testing.T, db *sql.DB) JobOwner {
+	t.Helper()
+
+	token := fmt.Sprintf("test-session-%d", time.Now().UnixNano())
+
+	var sessionID int64
+	err := db.QueryRow(`
+		INSERT INTO sessions (token, created_at, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`,
+		token,
+		time.Now(),
+		time.Now().Add(24*time.Hour),
+	).Scan(&sessionID)
+
+	if err != nil {
+		t.Fatalf("failed to create test session: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(
+			"DELETE FROM sessions WHERE id = $1",
+			sessionID,
+		)
+	})
+
+	return JobOwner{
+		SessionID: &sessionID,
 	}
 }
