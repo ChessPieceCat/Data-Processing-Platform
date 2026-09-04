@@ -2523,14 +2523,7 @@ func GuestSessionHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		// Set the session cookie for the guest user.
-		http.SetCookie(w, &http.Cookie{
-			Name:     "session_id",
-			Value:    sessionToken,
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
-			Path:     "/",
-		})
+		auth.SetSessionCookie(w, sessionToken)
 
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}

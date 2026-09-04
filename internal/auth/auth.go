@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"net/http"
 	"time"
 )
 
@@ -42,4 +43,48 @@ func StoreGuestSession(db *sql.DB, token string) error {
 	)
 
 	return err
+}
+
+const SessionCookieName = "session_id"
+
+func SetSessionCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    token,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+	})
+}
+
+func GetSessionToken(r *http.Request) (string, error) {
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return "", err
+	}
+
+	return cookie.Value, nil
+}
+
+func GetSession(db *sql.DB, token string) (*Session, error) {
+	var session Session
+
+	err := db.QueryRow(`
+		SELECT id, token, user_id, expires_at, created_at
+		FROM sessions
+		WHERE token = $1
+	`, token).Scan(
+		&session.ID,
+		&session.Token,
+		&session.UserID,
+		&session.ExpiresAt,
+		&session.CreatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &session, nil
 }
