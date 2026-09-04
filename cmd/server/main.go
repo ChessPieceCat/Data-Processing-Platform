@@ -118,7 +118,7 @@ func main() {
 	// Handle dataset inspection.
 	http.HandleFunc(
 		"/inspect/dataset",
-		apphttp.DatasetInspectionHandler,
+		apphttp.DatasetInspectionHandler(db),
 	)
 
 	// Handle uploads.

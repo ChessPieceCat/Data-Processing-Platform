@@ -911,24 +911,42 @@ type Job struct {
 	SessionID       *int64
 }
 
-func GetJobs(db *sql.DB) ([]Job, error) {
-	rows, err := db.Query(
-		`SELECT id, type, status, attempts, created_at, started_at, completed_at, error_message
-		 FROM jobs
-		 ORDER BY created_at DESC`,
+func GetJobs(db *sql.DB, owner JobOwner) ([]Job, error) {
+	var (
+		rows *sql.Rows
+		err  error
 	)
+
+	switch {
+	case owner.UserID != nil:
+		rows, err = db.Query(`
+			SELECT id, type, status, attempts, created_at, started_at, completed_at, error_message
+			FROM jobs
+			WHERE user_id = $1
+			ORDER BY created_at DESC
+		`, *owner.UserID)
+
+	case owner.SessionID != nil:
+		rows, err = db.Query(`
+			SELECT id, type, status, attempts, created_at, started_at, completed_at, error_message
+			FROM jobs
+			WHERE session_id = $1
+			ORDER BY created_at DESC
+		`, *owner.SessionID)
+
+	default:
+		return nil, fmt.Errorf("job owner is required")
+	}
 
 	if err != nil {
 		return nil, err
 	}
-
 	defer rows.Close()
 
 	var jobs []Job
 
 	for rows.Next() {
 		var j Job
-
 		if err := rows.Scan(
 			&j.ID,
 			&j.Type,

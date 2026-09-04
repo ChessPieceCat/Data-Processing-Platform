@@ -113,10 +113,8 @@ func clearJobsTable(t *testing.T, db *sql.DB) {
 
 // createTestJob creates a dataset job and registers cleanup for the database row.*
 
-func createTestJob(t *testing.T, db *sql.DB) int64 {
+func createTestJob(t *testing.T, db *sql.DB, owner JobOwner) int64 {
 	t.Helper()
-
-	owner := createTestOwner(t, db)
 
 	jobID, err := CreateJob(
 		db,
@@ -144,8 +142,8 @@ func createTestJob(t *testing.T, db *sql.DB) int64 {
 func TestCreateJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if jobID <= 0 {
 
@@ -228,14 +226,14 @@ func TestGetJobNotFound(t *testing.T) {
 func TestGetJobs(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
-	firstID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	firstID := createTestJob(t, db, owner)
 
 	time.Sleep(time.Millisecond)
 
-	secondID := createTestJob(t, db)
+	secondID := createTestJob(t, db, owner)
 
-	jobList, err := GetJobs(db)
+	jobList, err := GetJobs(db, owner)
 
 	if err != nil {
 
@@ -317,7 +315,8 @@ func TestStartJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if err := startJob(db, jobID); err != nil {
 
@@ -360,7 +359,8 @@ func TestCompleteJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if err := startJob(db, jobID); err != nil {
 
@@ -415,7 +415,8 @@ func TestFailJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	errorMessage := "test processing failure"
 
@@ -471,7 +472,8 @@ func TestSaveResultReference(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	resultPath := "uploads/123/results.json"
 
@@ -881,7 +883,8 @@ func TestRunProcessorMissingInput(t *testing.T) {
 func TestProcessJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputKey := fmt.Sprintf(
 		"jobs/%d/dataset.csv",
@@ -1219,7 +1222,8 @@ func TestProcessImageJobSuccess(t *testing.T) {
 func TestProcessJobFailure(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputReference := fmt.Sprintf(
 		"jobs/%d/does-not-exist.csv",
@@ -1282,7 +1286,8 @@ func TestProcessJobFailure(t *testing.T) {
 func TestProcessJobMissingInput(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 	m := createTestMetrics()
 	err := ProcessJob(
 		db,
@@ -1447,7 +1452,8 @@ func TestEnqueueJob(t *testing.T) {
 func TestProcessJobUnsupportedType(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputKey := fmt.Sprintf(
 		"jobs/%d/test-input.csv",
@@ -1862,12 +1868,14 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 func TestStartJobPreventsDuplicateProcessing(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
+	owner := createTestOwner(t, db)
 	jobID := createTestJob(
 
 		t,
 
 		db,
+
+		owner,
 	)
 
 	var wg sync.WaitGroup

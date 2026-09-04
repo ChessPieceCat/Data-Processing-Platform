@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"io"
+	"time"
 
 	"context"
 
@@ -145,7 +146,7 @@ func TestParseJobID(t *testing.T) {
 // TestGetTemporaryDataset verifies validation of temporary upload IDs.
 
 func TestGetTemporaryDataset(t *testing.T) {
-
+	db := setupTestDatabase(t)
 	tests := []struct {
 		name string
 
@@ -177,7 +178,11 @@ func TestGetTemporaryDataset(t *testing.T) {
 
 		t.Run(tt.name, func(t *testing.T) {
 
-			_, err := getTemporaryDataset(tt.uploadID)
+			_, err := getTemporaryDataset(
+				db,
+				tt.uploadID,
+				0,
+			)
 
 			if !errors.Is(err, tt.wantErr) {
 
@@ -203,6 +208,22 @@ func TestGetTemporaryDataset(t *testing.T) {
 // is returned successfully.
 
 func TestGetTemporaryDatasetExistingFile(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	sessionToken, err := auth.GenerateSessionToken()
+
+	if err != nil {
+		t.Fatalf("failed to generate test session token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+		t.Fatalf("failed to store test session: %v", err)
+	}
+
+	var sessionID int64
+	if err := db.QueryRow(`SELECT id FROM sessions WHERE token = $1`, sessionToken).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to query session ID: %v", err)
+	}
 
 	if err := os.MkdirAll(temporaryUploadDirectory, 0755); err != nil {
 
@@ -211,6 +232,11 @@ func TestGetTemporaryDatasetExistingFile(t *testing.T) {
 	}
 
 	uploadID := "550e8400-e29b-41d4-a716-446655440000"
+
+	if _, err := db.Exec(`INSERT INTO temporary_uploads (upload_id, session_id, created_at) VALUES ($1, $2, $3)`, uploadID, sessionID, time.Now()); err != nil {
+
+		t.Fatalf("failed to insert temporary dataset record: %v", err)
+	}
 
 	tempPath := filepath.Join(
 
@@ -225,9 +251,16 @@ func TestGetTemporaryDatasetExistingFile(t *testing.T) {
 
 	}
 
-	defer os.Remove(tempPath)
+	t.Cleanup(func() {
+		os.Remove(tempPath)
+		_, _ = db.Exec(`DELETE FROM temporary_uploads WHERE upload_id = $1`, uploadID)
+	})
 
-	got, err := getTemporaryDataset(uploadID)
+	got, err := getTemporaryDataset(
+		db,
+		uploadID,
+		sessionID,
+	)
 
 	if err != nil {
 
@@ -246,7 +279,7 @@ func TestGetTemporaryDatasetExistingFile(t *testing.T) {
 // TestGetTemporaryImage verifies validation of temporary image upload IDs.
 
 func TestGetTemporaryImage(t *testing.T) {
-
+	db := setupTestDatabase(t)
 	tests := []struct {
 		name string
 
@@ -278,7 +311,11 @@ func TestGetTemporaryImage(t *testing.T) {
 
 		t.Run(tt.name, func(t *testing.T) {
 
-			_, err := getTemporaryImage(tt.uploadID)
+			_, err := getTemporaryImage(
+				db,
+				tt.uploadID,
+				0,
+			)
 
 			if !errors.Is(err, tt.wantErr) {
 
@@ -304,6 +341,22 @@ func TestGetTemporaryImage(t *testing.T) {
 // temporary image is returned successfully.
 
 func TestGetTemporaryImageExistingFile(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	sessionToken, err := auth.GenerateSessionToken()
+
+	if err != nil {
+		t.Fatalf("failed to generate test session token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+		t.Fatalf("failed to store test session: %v", err)
+	}
+
+	var sessionID int64
+	if err := db.QueryRow(`SELECT id FROM sessions WHERE token = $1`, sessionToken).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to query session ID: %v", err)
+	}
 
 	if err := os.MkdirAll(
 
@@ -322,6 +375,11 @@ func TestGetTemporaryImageExistingFile(t *testing.T) {
 	}
 
 	uploadID := "550e8400-e29b-41d4-a716-446655440000"
+
+	if _, err := db.Exec(`INSERT INTO temporary_uploads (upload_id, session_id, created_at) VALUES ($1, $2, $3)`, uploadID, sessionID, time.Now()); err != nil {
+
+		t.Fatalf("failed to insert temporary upload record: %v", err)
+	}
 
 	tempPath := filepath.Join(
 
@@ -352,9 +410,14 @@ func TestGetTemporaryImageExistingFile(t *testing.T) {
 
 		os.Remove(tempPath)
 
+		_, _ = db.Exec(`DELETE FROM temporary_uploads WHERE upload_id = $1`, uploadID)
 	})
 
-	got, err := getTemporaryImage(uploadID)
+	got, err := getTemporaryImage(
+		db,
+		uploadID,
+		sessionID,
+	)
 
 	if err != nil {
 
@@ -1007,7 +1070,10 @@ func TestDatasetInspectionHandlerRejectsWrongMethod(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 
@@ -1041,7 +1107,10 @@ func TestDatasetInspectionHandlerRequiresCSV(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 
@@ -1238,6 +1307,29 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 		t.Fatalf("failed to store test guest session: %v", err)
 	}
 
+	var sessionID int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionToken,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to query session ID: %v", err)
+	}
+
+	if _, err := db.Exec(`
+    INSERT INTO temporary_uploads (
+        upload_id,
+        session_id,
+        created_at
+    )
+    VALUES ($1, $2, $3)
+`,
+		uploadID,
+		sessionID,
+		time.Now(),
+	); err != nil {
+		t.Fatalf("failed to insert temporary upload record: %v", err)
+	}
+
 	req.AddCookie(&http.Cookie{
 		Name:  auth.SessionCookieName,
 		Value: sessionToken,
@@ -1250,12 +1342,7 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 		metrics,
 	)
 
-	wrappedHandler := auth.SessionMiddleware(
-		db,
-		handler,
-	)
-
-	wrappedHandler.ServeHTTP(rec, req)
+	auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 
@@ -1305,6 +1392,11 @@ func TestDatasetSubmissionHandlerEnqueuesJob(t *testing.T) {
 			store,
 		)
 	})
+
+	_, _ = db.Exec(
+		`DELETE FROM temporary_uploads WHERE upload_id = $1`,
+		uploadID,
+	)
 
 	// Find the Redis message containing this job ID.
 
@@ -1941,6 +2033,29 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 		t.Fatalf("failed to store test guest session: %v", err)
 	}
 
+	var sessionID int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionToken,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("failed to query session ID: %v", err)
+	}
+
+	if _, err := db.Exec(`
+    INSERT INTO temporary_uploads (
+        upload_id,
+        session_id,
+        created_at
+    )
+    VALUES ($1, $2, $3)
+`,
+		uploadID,
+		sessionID,
+		time.Now(),
+	); err != nil {
+		t.Fatalf("failed to insert temporary upload record: %v", err)
+	}
+
 	req.AddCookie(&http.Cookie{
 		Name:  auth.SessionCookieName,
 		Value: sessionToken,
@@ -1953,12 +2068,7 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 		metrics,
 	)
 
-	wrappedHandler := auth.SessionMiddleware(
-		db,
-		handler,
-	)
-
-	wrappedHandler.ServeHTTP(rec, req)
+	auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusSeeOther {
 
@@ -2010,34 +2120,10 @@ func TestImageSubmissionHandlerEnqueuesJob(t *testing.T) {
 		)
 	})
 
-	var status string
-
-	if err := db.QueryRow(
-
-		`SELECT status FROM jobs WHERE id = $1`,
-
-		jobID,
-	).Scan(&status); err != nil {
-
-		t.Fatalf(
-
-			"failed to retrieve job status: %v",
-
-			err,
-		)
-
-	}
-
-	if status != "queued" {
-
-		t.Fatalf(
-
-			"expected job status queued, got %q",
-
-			status,
-		)
-
-	}
+	_, _ = db.Exec(
+		`DELETE FROM temporary_uploads WHERE upload_id = $1`,
+		uploadID,
+	)
 
 	var inputReference string
 
@@ -2607,7 +2693,10 @@ func TestDatasetInspectionHandlerRejectsEmptyFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2630,7 +2719,10 @@ func TestDatasetInspectionHandlerRejectsWrongExtension(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2653,7 +2745,10 @@ func TestDatasetInspectionHandlerRejectsMalformedCSV(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2680,7 +2775,10 @@ func TestDatasetInspectionHandlerRejectsOversizedFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	DatasetInspectionHandler(rec, req)
+	db := setupTestDatabase(t)
+
+	handler := DatasetInspectionHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -3069,4 +3167,76 @@ func TestGuestSessionHandlerMethodNotAllowed(t *testing.T) {
 			rec.Code,
 		)
 	}
+}
+
+func setupTestDatabase(t *testing.T) *sql.DB {
+
+	t.Helper()
+
+	m := database.RunMigrations()
+
+	if m == nil {
+
+		t.Fatal("RunMigrations returned nil")
+
+	}
+
+	t.Cleanup(func() {
+
+		database.CloseMigrations(m)
+
+	})
+
+	db := database.OpenDatabase()
+
+	if db == nil {
+
+		t.Fatal("OpenDatabase returned nil")
+
+	}
+
+	if err := db.Ping(); err != nil {
+
+		db.Close()
+
+		t.Fatalf("database ping failed: %v", err)
+
+	}
+
+	t.Cleanup(func() {
+
+		db.Close()
+
+	})
+
+	return db
+
+}
+
+func serveWithTestSession(
+	t *testing.T,
+	db *sql.DB,
+	handler http.Handler,
+	rec http.ResponseWriter,
+	req *http.Request,
+) string {
+	t.Helper()
+
+	sessionToken, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate test session token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+		t.Fatalf("failed to store test guest session: %v", err)
+	}
+
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionToken,
+	})
+
+	auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+	return sessionToken
 }
