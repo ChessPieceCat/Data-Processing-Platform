@@ -2378,3 +2378,40 @@ func createTestOwner(t *testing.T, db *sql.DB) JobOwner {
 		SessionID: &sessionID,
 	}
 }
+
+func TestGetJobForOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
+
+	job, err := GetJobForOwner(db, jobID, owner)
+	if err != nil {
+		t.Fatalf("GetJobForOwner failed: %v", err)
+	}
+
+	if job.ID != jobID {
+		t.Fatalf(
+			"expected job ID %d, got %d",
+			jobID,
+			job.ID,
+		)
+	}
+}
+
+func TestGetJobForOwnerRejectsDifferentOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
+
+	differentOwner := createTestOwner(t, db)
+
+	_, err := GetJobForOwner(db, jobID, differentOwner)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf(
+			"expected sql.ErrNoRows for different owner, got %v",
+			err,
+		)
+	}
+}

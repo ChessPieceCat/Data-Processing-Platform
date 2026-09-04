@@ -1000,6 +1000,60 @@ func GetJob(db *sql.DB, jobID int64) (*Job, error) {
 	return &j, nil
 }
 
+func GetJobForOwner(db *sql.DB, jobID int64, owner JobOwner) (*Job, error) {
+	var (
+		j   Job
+		err error
+	)
+
+	switch {
+	case owner.UserID != nil:
+		err = db.QueryRow(`
+		SELECT id, type, status, attempts, created_at, started_at, completed_at,
+		error_message, result_reference, input_reference
+		FROM jobs
+		WHERE id = $1
+		AND user_id = $2`,
+			jobID, *owner.UserID).Scan(
+			&j.ID,
+			&j.Type,
+			&j.Status,
+			&j.Attempts,
+			&j.CreatedAt,
+			&j.StartedAt,
+			&j.CompletedAt,
+			&j.ErrorMessage,
+			&j.ResultReference,
+			&j.InputReference,
+		)
+	case owner.SessionID != nil:
+		err = db.QueryRow(`
+		SELECT id, type, status, attempts, created_at, started_at, completed_at,
+		error_message, result_reference, input_reference
+		FROM jobs
+		WHERE id = $1
+		AND session_id = $2`,
+			jobID, *owner.SessionID).Scan(
+			&j.ID,
+			&j.Type,
+			&j.Status,
+			&j.Attempts,
+			&j.CreatedAt,
+			&j.StartedAt,
+			&j.CompletedAt,
+			&j.ErrorMessage,
+			&j.ResultReference,
+			&j.InputReference,
+		)
+	default:
+		return nil, fmt.Errorf("job owner is required")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
 // ValidateCSV verifies that the file can be parsed as CSV.
 func ValidateCSV(filePath string) error {
 	file, err := os.Open(filePath)
