@@ -2897,3 +2897,135 @@ func TestImageUploadHandlerAcceptsMalformedJPEGSignature(t *testing.T) {
 		}
 	})
 }
+
+func TestGuestSessionHandler(t *testing.T) {
+	m := database.RunMigrations()
+
+	if m == nil {
+		t.Fatal("RunMigrations returned nil")
+	}
+
+	t.Cleanup(func() {
+		database.CloseMigrations(m)
+	})
+
+	db := database.OpenDatabase()
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		t.Skipf("PostgreSQL is not available: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/guest",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := GuestSessionHandler(db)
+	handler(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusSeeOther,
+			rec.Code,
+		)
+	}
+
+	if location := rec.Header().Get("Location"); location != "/" {
+		t.Fatalf("expected redirect to /, got %q", location)
+	}
+
+	cookies := rec.Result().Cookies()
+
+	if len(cookies) != 1 {
+		t.Fatalf(
+			"expected 1 response cookie, got %d",
+			len(cookies),
+		)
+	}
+
+	cookie := cookies[0]
+
+	if cookie.Name != "session_id" {
+		t.Fatalf(
+			"expected cookie name session_id, got %q",
+			cookie.Name,
+		)
+	}
+
+	if cookie.Value == "" {
+		t.Fatal("expected session cookie to contain a token")
+	}
+
+	if !cookie.HttpOnly {
+		t.Fatal("expected session cookie to be HttpOnly")
+	}
+
+	if !cookie.Secure {
+		t.Fatal("expected session cookie to be Secure")
+	}
+
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf(
+			"expected SameSite=Lax, got %v",
+			cookie.SameSite,
+		)
+	}
+
+	if cookie.Path != "/" {
+		t.Fatalf(
+			"expected cookie path /, got %q",
+			cookie.Path,
+		)
+	}
+
+	var count int
+
+	err := db.QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE token = $1",
+		cookie.Value,
+	).Scan(&count)
+
+	if err != nil {
+		t.Fatalf("failed to verify stored session: %v", err)
+	}
+
+	if count != 1 {
+		t.Fatalf(
+			"expected exactly 1 stored session, got %d",
+			count,
+		)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(
+			"DELETE FROM sessions WHERE token = $1",
+			cookie.Value,
+		)
+	})
+}
+
+func TestGuestSessionHandlerMethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/guest",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := GuestSessionHandler(nil)
+	handler(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusMethodNotAllowed,
+			rec.Code,
+		)
+	}
+}

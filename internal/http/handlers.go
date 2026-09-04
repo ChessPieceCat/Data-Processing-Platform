@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/auth"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
@@ -2497,4 +2498,40 @@ func validateImageType(file multipart.File) error {
 	}
 
 	return nil
+}
+
+func GuestSessionHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Create a new guest session.
+		sessionToken, err := auth.GenerateSessionToken()
+		if err != nil {
+			log.Println("Error generating session token:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Store the guest session in the database.
+		if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+			log.Println("Error storing guest session:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Set the session cookie for the guest user.
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session_id",
+			Value:    sessionToken,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+			Path:     "/",
+		})
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
 }
