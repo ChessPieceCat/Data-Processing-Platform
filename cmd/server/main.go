@@ -117,20 +117,20 @@ func main() {
 	)
 
 	// Handle dataset inspection.
-	http.HandleFunc(
+	http.Handle(
 		"/inspect/dataset",
 		apphttp.DatasetInspectionHandler(db),
 	)
 
 	// Handle uploads.
-	http.HandleFunc(
+	http.Handle(
 		"/upload/image",
-		apphttp.ImageUploadHandler,
+		apphttp.ImageUploadHandler(db),
 	)
 
-	http.HandleFunc(
+	http.Handle(
 		"/upload/route",
-		apphttp.RouteUploadHandler,
+		apphttp.RouteUploadHandler(db),
 	)
 
 	// Handle job submission.

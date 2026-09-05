@@ -1653,8 +1653,10 @@ func TestImageUploadHandlerRejectsWrongMethod(t *testing.T) {
 	)
 
 	rec := httptest.NewRecorder()
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
 
-	ImageUploadHandler(rec, req)
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 
@@ -1688,7 +1690,10 @@ func TestImageUploadHandlerRequiresImage(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 
@@ -1782,7 +1787,10 @@ func TestImageUploadHandlerUploadsImage(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusOK {
 
@@ -2516,7 +2524,10 @@ func TestImageUploadHandlerRejectsEmptyFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2539,7 +2550,10 @@ func TestImageUploadHandlerRejectsUnsupportedExtension(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2562,7 +2576,10 @@ func TestImageUploadHandlerRejectsNonImageContent(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2614,7 +2631,10 @@ func TestImageUploadHandlerAcceptsSupportedFormats(t *testing.T) {
 
 			rec := httptest.NewRecorder()
 
-			ImageUploadHandler(rec, req)
+			db := setupTestDatabase(t)
+			handler := ImageUploadHandler(db)
+
+			serveWithTestSession(t, db, handler, rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf(
@@ -2673,7 +2693,10 @@ func TestImageUploadHandlerRejectsOversizedFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2858,7 +2881,10 @@ func TestRouteUploadHandlerRejectsEmptyRouteFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	RouteUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := RouteUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2882,7 +2908,10 @@ func TestRouteUploadHandlerRejectsEmptyDistanceFile(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	RouteUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := RouteUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2907,7 +2936,10 @@ func TestRouteUploadHandlerRejectsWrongRouteExtension(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	RouteUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := RouteUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2932,7 +2964,10 @@ func TestRouteUploadHandlerRejectsWrongDistanceExtension(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	RouteUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := RouteUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf(
@@ -2995,7 +3030,10 @@ func TestImageUploadHandlerAcceptsMalformedJPEGSignature(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 
-	ImageUploadHandler(rec, req)
+	db := setupTestDatabase(t)
+	handler := ImageUploadHandler(db)
+
+	serveWithTestSession(t, db, handler, rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf(

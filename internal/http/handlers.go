@@ -40,9 +40,23 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 		}
 
 		identity, ok := auth.IdentityFromContext(r)
+
 		if !ok {
-			log.Println("Error retrieving request identity")
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			sessionToken, err := auth.GenerateSessionToken()
+			if err != nil {
+				log.Println("Error generating guest session token:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+				log.Println("Error storing guest session:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			auth.SetSessionCookie(w, sessionToken)
+			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
 
@@ -1659,427 +1673,478 @@ func DatasetInspectionHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // ImageUploadHandler handles image uploads for image processing jobs.
-func ImageUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(
+func ImageUploadHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		sessionID := identity.SessionID
+
+		// Limit the total request size.
+		r.Body = http.MaxBytesReader(
 			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
-		return
-	}
-
-	// Limit the total request size.
-	r.Body = http.MaxBytesReader(
-		w,
-		r.Body,
-		MaxUploadSize,
-	)
-
-	// Retrieve the uploaded file.
-	file, header, err := r.FormFile("imageFile")
-	if err != nil {
-		log.Println("Error retrieving image:", err)
-
-		http.Error(
-			w,
-			"An image file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer file.Close()
-
-	// Reject empty files.
-	if header.Size == 0 {
-		http.Error(
-			w,
-			"The uploaded image is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Validate the image extension.
-	extension := strings.ToLower(
-		filepath.Ext(header.Filename),
-	)
-
-	switch extension {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		// Supported image format.
-	default:
-		http.Error(
-			w,
-			"Unsupported image format.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Validate the image type by reading the first few bytes.
-	if err := validateImageType(file); err != nil {
-		http.Error(w, "Unsupported image type.", http.StatusBadRequest)
-		return
-	}
-
-	// Create the temporary upload directory.
-	if err := os.MkdirAll(
-		temporaryUploadDirectory,
-		0755,
-	); err != nil {
-		log.Println(
-			"Error creating temporary upload directory:",
-			err,
+			r.Body,
+			MaxUploadSize,
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		// Retrieve the uploaded file.
+		file, header, err := r.FormFile("imageFile")
+		if err != nil {
+			log.Println("Error retrieving image:", err)
+			http.Error(
+				w,
+				"An image file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer file.Close()
 
-	uploadID := uuid.New().String()
+		// Reject empty files.
+		if header.Size == 0 {
+			http.Error(
+				w,
+				"The uploaded image is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	tempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+extension,
-	)
-
-	// Create a temporary file.
-	tempFile, err := os.Create(tempPath)
-	if err != nil {
-		log.Println(
-			"Error creating temporary image file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	// Save the uploaded image.
-	if _, err := io.Copy(tempFile, file); err != nil {
-		tempFile.Close()
-		os.Remove(tempPath)
-
-		log.Println(
-			"Error saving temporary image:",
-			err,
+		// Validate the image extension.
+		extension := strings.ToLower(
+			filepath.Ext(header.Filename),
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
+		switch extension {
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+			// Supported image format.
+		default:
+			http.Error(
+				w,
+				"Unsupported image format.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Validate the image type by reading the first few bytes.
+		if err := validateImageType(file); err != nil {
+			http.Error(
+				w,
+				"Unsupported image type.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Create the temporary upload directory.
+		if err := os.MkdirAll(
+			temporaryUploadDirectory,
+			0755,
+		); err != nil {
+			log.Println(
+				"Error creating temporary upload directory:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		uploadID := uuid.New().String()
+
+		tempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+extension,
 		)
-		return
-	}
 
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempPath)
+		// Create a temporary file.
+		tempFile, err := os.Create(tempPath)
+		if err != nil {
+			log.Println(
+				"Error creating temporary image file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-		log.Println(
-			"Error closing temporary image file:",
-			err,
+		// Save the uploaded image.
+		if _, err := io.Copy(tempFile, file); err != nil {
+			tempFile.Close()
+			os.Remove(tempPath)
+			log.Println(
+				"Error saving temporary image:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := tempFile.Close(); err != nil {
+			os.Remove(tempPath)
+			log.Println(
+				"Error closing temporary image file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Record ownership of the temporary upload.
+		if _, err := db.Exec(`
+		INSERT INTO temporary_uploads (upload_id, session_id, created_at)
+		VALUES ($1, $2, $3)
+	`, uploadID, sessionID, time.Now()); err != nil {
+			os.Remove(tempPath)
+			log.Println(
+				"Error recording temporary image upload:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(
-		inspectionResponse{
-			UploadID: uploadID,
-		},
-	); err != nil {
-		log.Println(
-			"Error encoding image upload response:",
-			err,
-		)
+		if err := json.NewEncoder(w).Encode(
+			inspectionResponse{
+				UploadID: uploadID,
+			},
+		); err != nil {
+			log.Println(
+				"Error encoding image upload response:",
+				err,
+			)
+		}
 	}
 }
 
 // RouteUploadHandler handles route file uploads for route optimization jobs.
-func RouteUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(
+func RouteUploadHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		sessionID := identity.SessionID
+
+		// Limit the total request size.
+		r.Body = http.MaxBytesReader(
 			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
-		return
-	}
-
-	// Limit the total request size.
-	r.Body = http.MaxBytesReader(
-		w,
-		r.Body,
-		MaxUploadSize,
-	)
-
-	// Retrieve the route CSV.
-	routeFile, routeHeader, err := r.FormFile("routeFile")
-	if err != nil {
-		http.Error(
-			w,
-			"A route CSV file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer routeFile.Close()
-
-	// Retrieve the distance-table CSV.
-	distanceFile, distanceHeader, err := r.FormFile("distanceFile")
-	if err != nil {
-		routeFile.Close()
-
-		http.Error(
-			w,
-			"A distance table CSV file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer distanceFile.Close()
-
-	// Reject empty files.
-	if routeHeader.Size == 0 {
-		http.Error(
-			w,
-			"The route CSV is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if distanceHeader.Size == 0 {
-		http.Error(
-			w,
-			"The distance table CSV is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Validate file extensions.
-	if strings.ToLower(filepath.Ext(routeHeader.Filename)) != ".csv" {
-		http.Error(
-			w,
-			"Only CSV route files are accepted.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if strings.ToLower(filepath.Ext(distanceHeader.Filename)) != ".csv" {
-		http.Error(
-			w,
-			"Only CSV distance table files are accepted.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Create the temporary upload directory.
-	if err := os.MkdirAll(
-		temporaryUploadDirectory,
-		0755,
-	); err != nil {
-		log.Println(
-			"Error creating temporary upload directory:",
-			err,
+			r.Body,
+			MaxUploadSize,
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		// Retrieve the route CSV.
+		routeFile, routeHeader, err := r.FormFile("routeFile")
+		if err != nil {
+			http.Error(
+				w,
+				"A route CSV file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer routeFile.Close()
 
-	uploadID := uuid.New().String()
+		// Retrieve the distance-table CSV.
+		distanceFile, distanceHeader, err := r.FormFile("distanceFile")
+		if err != nil {
+			routeFile.Close()
+			http.Error(
+				w,
+				"A distance table CSV file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer distanceFile.Close()
 
-	routeTempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+"_route.csv",
-	)
+		// Reject empty files.
+		if routeHeader.Size == 0 {
+			http.Error(
+				w,
+				"The route CSV is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	distanceTempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+"_distances.csv",
-	)
+		if distanceHeader.Size == 0 {
+			http.Error(
+				w,
+				"The distance table CSV is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	// Save the route CSV.
-	routeTempFile, err := os.Create(routeTempPath)
-	if err != nil {
-		log.Println(
-			"Error creating temporary route file:",
-			err,
-		)
+		// Validate file extensions.
+		if strings.ToLower(filepath.Ext(routeHeader.Filename)) != ".csv" {
+			http.Error(
+				w,
+				"Only CSV route files are accepted.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		if strings.ToLower(filepath.Ext(distanceHeader.Filename)) != ".csv" {
+			http.Error(
+				w,
+				"Only CSV distance table files are accepted.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	if _, err := io.Copy(routeTempFile, routeFile); err != nil {
-		routeTempFile.Close()
-		os.Remove(routeTempPath)
+		// Create the temporary upload directory.
+		if err := os.MkdirAll(
+			temporaryUploadDirectory,
+			0755,
+		); err != nil {
+			log.Println(
+				"Error creating temporary upload directory:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-		log.Println(
-			"Error saving temporary route file:",
-			err,
-		)
+		uploadID := uuid.New().String()
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if err := routeTempFile.Close(); err != nil {
-		os.Remove(routeTempPath)
-
-		log.Println(
-			"Error closing temporary route file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	// Save the distance table CSV.
-	distanceTempFile, err := os.Create(distanceTempPath)
-	if err != nil {
-		os.Remove(routeTempPath)
-
-		log.Println(
-			"Error creating temporary distance table file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if _, err := io.Copy(distanceTempFile, distanceFile); err != nil {
-		distanceTempFile.Close()
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Error saving temporary distance table file:",
-			err,
+		routeTempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+"_route.csv",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if err := distanceTempFile.Close(); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Error closing temporary distance table file:",
-			err,
+		distanceTempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+"_distances.csv",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
+		// Save the route CSV.
+		routeTempFile, err := os.Create(routeTempPath)
+		if err != nil {
+			log.Println(
+				"Error creating temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if _, err := io.Copy(routeTempFile, routeFile); err != nil {
+			routeTempFile.Close()
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error saving temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := routeTempFile.Close(); err != nil {
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error closing temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Save the distance table CSV.
+		distanceTempFile, err := os.Create(distanceTempPath)
+		if err != nil {
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error creating temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if _, err := io.Copy(distanceTempFile, distanceFile); err != nil {
+			distanceTempFile.Close()
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error saving temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := distanceTempFile.Close(); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error closing temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Verify that both files are valid CSV files.
+		if err := jobs.ValidateCSV(routeTempPath); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Invalid route CSV:",
+				err,
+			)
+			http.Error(
+				w,
+				"The uploaded route file is not a valid CSV file.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if err := jobs.ValidateCSV(distanceTempPath); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Invalid distance table CSV:",
+				err,
+			)
+			http.Error(
+				w,
+				"The uploaded distance table is not a valid CSV file.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		log.Printf(
+			"ABOUT TO RECORD TEMPORARY UPLOAD: uploadID=%s, sessionID=%d",
+			uploadID,
+			sessionID,
 		)
-		return
-	}
+		// Record ownership of the temporary upload.
+		if _, err := db.Exec(`
+		INSERT INTO temporary_uploads (upload_id, session_id, created_at)
+		VALUES ($1, $2, $3)
+	`, uploadID, sessionID, time.Now()); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error recording temporary upload:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-	// Verify that both files are valid CSV files.
-	if err := jobs.ValidateCSV(routeTempPath); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
+		log.Printf("Temporary upload recorded: uploadID=%s, sessionID=%d", uploadID, sessionID)
 
-		log.Println(
-			"Invalid route CSV:",
-			err,
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
 		)
 
-		http.Error(
-			w,
-			"The uploaded route file is not a valid CSV file.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if err := jobs.ValidateCSV(distanceTempPath); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Invalid distance table CSV:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"The uploaded distance table is not a valid CSV file.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(
-		struct {
-			UploadID string `json:"upload_id"`
-		}{
-			UploadID: uploadID,
-		},
-	); err != nil {
-		log.Println(
-			"Error encoding route upload response:",
-			err,
-		)
+		if err := json.NewEncoder(w).Encode(
+			struct {
+				UploadID string `json:"upload_id"`
+			}{
+				UploadID: uploadID,
+			},
+		); err != nil {
+			log.Println(
+				"Error encoding route upload response:",
+				err,
+			)
+		}
 	}
 }
 
