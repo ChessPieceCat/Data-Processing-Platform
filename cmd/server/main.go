@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"text/template"
 
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/auth"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/database"
 	apphttp "github.com/ChessPieceCat/Data-Processing-Platform/internal/http"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -116,20 +117,20 @@ func main() {
 	)
 
 	// Handle dataset inspection.
-	http.HandleFunc(
+	http.Handle(
 		"/inspect/dataset",
-		apphttp.DatasetInspectionHandler,
+		apphttp.DatasetInspectionHandler(db),
 	)
 
 	// Handle uploads.
-	http.HandleFunc(
+	http.Handle(
 		"/upload/image",
-		apphttp.ImageUploadHandler,
+		apphttp.ImageUploadHandler(db),
 	)
 
-	http.HandleFunc(
+	http.Handle(
 		"/upload/route",
-		apphttp.RouteUploadHandler,
+		apphttp.RouteUploadHandler(db),
 	)
 
 	// Handle job submission.
@@ -163,6 +164,22 @@ func main() {
 		),
 	)
 
+	// Handle user authentication.
+	http.HandleFunc(
+		"/register",
+		apphttp.RegisterHandler(db),
+	)
+
+	http.HandleFunc(
+		"/login",
+		apphttp.LoginHandler(db),
+	)
+
+	http.HandleFunc(
+		"/logout",
+		apphttp.LogoutHandler(db),
+	)
+
 	// Start the HTTP server.
 	log.Println(
 		"Server is running on http://localhost:8082",
@@ -171,7 +188,10 @@ func main() {
 	log.Fatal(
 		http.ListenAndServe(
 			":8082",
-			metrics.Middleware(appMetrics, http.DefaultServeMux),
+			metrics.Middleware(
+				appMetrics,
+				auth.SessionMiddleware(db, http.DefaultServeMux),
+			),
 		),
 	)
 }

@@ -9,7 +9,22 @@
 
 <body>
     <header>
-        <h1>Data Processing Platform</h1>
+        <div>
+            <h1>Data Processing Platform</h1>
+        </div>
+
+        <nav>
+            {{if .Authenticated}}
+                <span>Logged in as <strong>{{.Username}}</strong></span>
+                <form action="/logout" method="post" style="display: inline;">
+                    <button type="submit">Log Out</button>
+                </form>
+            {{else}}
+                <a href="/login">Log In</a>
+                |
+                <a href="/register">Create Account</a>
+            {{end}}
+        </nav>
     </header>
 
     <main>

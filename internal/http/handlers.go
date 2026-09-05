@@ -8,13 +8,19 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
+	"unicode"
 
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ChessPieceCat/Data-Processing-Platform/internal/auth"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
@@ -33,7 +39,50 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			return
 		}
 
-		jobList, err := jobs.GetJobs(db)
+		identity, ok := auth.IdentityFromContext(r)
+
+		if !ok {
+			sessionToken, err := auth.GenerateSessionToken()
+			if err != nil {
+				log.Println("Error generating guest session token:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+				log.Println("Error storing guest session:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			auth.SetSessionCookie(w, sessionToken)
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+
+		owner, err := ownerFromRequest(r)
+		if err != nil {
+			log.Println("Error retrieving request identity:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		var username string
+
+		if identity.UserID != nil {
+			err := db.QueryRow(
+				"SELECT username FROM users WHERE id = $1",
+				*identity.UserID,
+			).Scan(&username)
+
+			if err != nil {
+				log.Println("Error retrieving username:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		jobList, err := jobs.GetJobs(db, owner)
 		if err != nil {
 			log.Println("Error retrieving jobs:", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -41,9 +90,13 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 		}
 
 		data := struct {
-			Jobs []jobs.Job
+			Jobs          []jobs.Job
+			Authenticated bool
+			Username      string
 		}{
-			Jobs: jobList,
+			Jobs:          jobList,
+			Authenticated: identity.UserID != nil,
+			Username:      username,
 		}
 
 		if err := tmpl.Execute(w, data); err != nil {
@@ -61,7 +114,7 @@ func ResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -299,11 +352,13 @@ func prepareJob(
 	sourcePath string,
 	filename string,
 	m *metrics.Metrics,
+	owner jobs.JobOwner,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		jobType,
 		m,
+		owner,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -389,11 +444,13 @@ func prepareRouteJob(
 	routeTempPath string,
 	distanceTempPath string,
 	m *metrics.Metrics,
+	owner jobs.JobOwner,
 ) (int64, string, error) {
 	jobID, err := jobs.CreateJobWithLimit(
 		db,
 		"route",
 		m,
+		owner,
 	)
 	if err != nil {
 		return 0, "", fmt.Errorf(
@@ -610,10 +667,25 @@ func RouteSubmissionHandler(
 			return
 		}
 
-		uploadID := r.FormValue("uploadID")
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
+		uploadID := r.FormValue("uploadID")
+		sessionID := identity.SessionID
 		routeTempPath, distanceTempPath, err :=
-			getTemporaryRouteFiles(uploadID)
+			getTemporaryRouteFiles(db, uploadID, sessionID)
 
 		if err != nil {
 			switch {
@@ -666,6 +738,7 @@ func RouteSubmissionHandler(
 			routeTempPath,
 			distanceTempPath,
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(
@@ -753,10 +826,27 @@ func DatasetSubmissionHandler(
 			return
 		}
 
-		uploadID := r.FormValue("uploadID")
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
+		uploadID := r.FormValue("uploadID")
+		sessionID := identity.SessionID
 		tempPath, err := getTemporaryDataset(
+			db,
 			uploadID,
+			sessionID,
 		)
 		if err != nil {
 			switch {
@@ -810,6 +900,7 @@ func DatasetSubmissionHandler(
 			tempPath,
 			"dataset.csv",
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(
@@ -897,10 +988,27 @@ func ImageSubmissionHandler(
 			return
 		}
 
-		uploadID := r.FormValue("uploadID")
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
+		owner := jobs.JobOwner{
+			UserID: identity.UserID,
+		}
+
+		if identity.UserID == nil {
+			sessionID := identity.SessionID
+			owner.SessionID = &sessionID
+		}
+
+		uploadID := r.FormValue("uploadID")
+		sessionID := identity.SessionID
 		tempPath, err := getTemporaryImage(
+			db,
 			uploadID,
+			sessionID,
 		)
 		if err != nil {
 			switch {
@@ -954,6 +1062,7 @@ func ImageSubmissionHandler(
 			tempPath,
 			"input"+filepath.Ext(tempPath),
 			m,
+			owner,
 		)
 		if err != nil {
 			if errors.Is(
@@ -1149,7 +1258,7 @@ func DownloadResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc 
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, fmt.Sprintf("job with ID %d not found", jobIDInt), http.StatusNotFound)
@@ -1205,7 +1314,7 @@ func DownloadModelHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, fmt.Sprintf("job with ID %d not found", jobIDInt), http.StatusNotFound)
@@ -1308,7 +1417,7 @@ func DownloadImageMetadataHandler(db *sql.DB, store storage.Storage) http.Handle
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -1432,513 +1541,610 @@ func DownloadImageMetadataHandler(db *sql.DB, store storage.Storage) http.Handle
 }
 
 // DatasetInspectionHandler handles dataset inspection.
-func DatasetInspectionHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func DatasetInspectionHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-	// Limit the total request size.
-	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadSize)
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-	// Retrieve the uploaded file.
-	file, header, err := r.FormFile("csvFile")
-	if err != nil {
-		log.Println("Error retrieving file:", err)
-		http.Error(w, "A CSV file is required.", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+		sessionID := identity.SessionID
 
-	// Reject empty files.
-	if header.Size == 0 {
-		http.Error(w, "The uploaded file is empty.", http.StatusBadRequest)
-		return
-	}
+		// Limit the total request size.
+		r.Body = http.MaxBytesReader(w, r.Body, MaxUploadSize)
 
-	// Validate the filename extension.
-	extension := strings.ToLower(filepath.Ext(header.Filename))
-	if extension != ".csv" {
-		http.Error(w, "Only CSV files are accepted.", http.StatusBadRequest)
-		return
-	}
+		// Retrieve the uploaded file.
+		file, header, err := r.FormFile("csvFile")
+		if err != nil {
+			log.Println("Error retrieving file:", err)
+			http.Error(w, "A CSV file is required.", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
 
-	// Create the temporary upload directory.
-	if err := os.MkdirAll(temporaryUploadDirectory, 0755); err != nil {
-		log.Println("Error creating temporary upload directory:", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		// Reject empty files.
+		if header.Size == 0 {
+			http.Error(w, "The uploaded file is empty.", http.StatusBadRequest)
+			return
+		}
 
-	uploadID := uuid.New().String()
-	tempPath := filepath.Join(temporaryUploadDirectory, uploadID+".csv")
+		// Validate the filename extension.
+		extension := strings.ToLower(filepath.Ext(header.Filename))
+		if extension != ".csv" {
+			http.Error(w, "Only CSV files are accepted.", http.StatusBadRequest)
+			return
+		}
 
-	// Create a temporary file.
-	tempFile, err := os.Create(tempPath)
-	if err != nil {
-		log.Println("Error creating temporary file:", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		// Create the temporary upload directory.
+		if err := os.MkdirAll(temporaryUploadDirectory, 0755); err != nil {
+			log.Println("Error creating temporary upload directory:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	// Save the uploaded file.
-	if _, err := io.Copy(tempFile, file); err != nil {
-		tempFile.Close()
-		os.Remove(tempPath)
-		log.Println("Error saving temporary file:", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		uploadID := uuid.New().String()
+		tempPath := filepath.Join(temporaryUploadDirectory, uploadID+".csv")
 
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempPath)
-		log.Println("Error closing temporary file:", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+		// Create a temporary file.
+		tempFile, err := os.Create(tempPath)
+		if err != nil {
+			log.Println("Error creating temporary file:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	// Verify that the file is valid CSV.
-	if err := jobs.ValidateCSV(tempPath); err != nil {
-		os.Remove(tempPath)
-		log.Println("Invalid CSV:", err)
-		http.Error(w, "The uploaded file is not a valid CSV file.", http.StatusBadRequest)
-		return
-	}
+		// Save the uploaded file.
+		if _, err := io.Copy(tempFile, file); err != nil {
+			tempFile.Close()
+			os.Remove(tempPath)
+			log.Println("Error saving temporary file:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	// Get the column names.
-	columns, err := jobs.GetCSVColumns(tempPath)
-	if err != nil {
-		os.Remove(tempPath)
-		log.Println("Error reading CSV columns:", err)
-		http.Error(w, "Unable to read CSV columns.", http.StatusBadRequest)
-		return
-	}
+		if err := tempFile.Close(); err != nil {
+			os.Remove(tempPath)
+			log.Println("Error closing temporary file:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(inspectionResponse{
-		UploadID: uploadID,
-		Columns:  columns,
-	}); err != nil {
-		log.Println("Error encoding column response:", err)
+		// Verify that the file is valid CSV.
+		if err := jobs.ValidateCSV(tempPath); err != nil {
+			os.Remove(tempPath)
+			log.Println("Invalid CSV:", err)
+			http.Error(w, "The uploaded file is not a valid CSV file.", http.StatusBadRequest)
+			return
+		}
+
+		// Get the column names.
+		columns, err := jobs.GetCSVColumns(tempPath)
+		if err != nil {
+			os.Remove(tempPath)
+			log.Println("Error reading CSV columns:", err)
+			http.Error(w, "Unable to read CSV columns.", http.StatusBadRequest)
+			return
+		}
+
+		_, err = db.Exec(`
+	INSERT INTO temporary_uploads (
+		upload_id,
+		session_id,
+		created_at
+	)
+	VALUES ($1, $2, $3)
+`,
+			uploadID,
+			sessionID,
+			time.Now(),
+		)
+
+		if err != nil {
+			os.Remove(tempPath)
+
+			log.Println("Error recording temporary upload:", err)
+
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(inspectionResponse{
+			UploadID: uploadID,
+			Columns:  columns,
+		}); err != nil {
+			log.Println("Error encoding column response:", err)
+		}
 	}
 }
 
 // ImageUploadHandler handles image uploads for image processing jobs.
-func ImageUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(
+func ImageUploadHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		sessionID := identity.SessionID
+
+		// Limit the total request size.
+		r.Body = http.MaxBytesReader(
 			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
-		return
-	}
-
-	// Limit the total request size.
-	r.Body = http.MaxBytesReader(
-		w,
-		r.Body,
-		MaxUploadSize,
-	)
-
-	// Retrieve the uploaded file.
-	file, header, err := r.FormFile("imageFile")
-	if err != nil {
-		log.Println("Error retrieving image:", err)
-
-		http.Error(
-			w,
-			"An image file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer file.Close()
-
-	// Reject empty files.
-	if header.Size == 0 {
-		http.Error(
-			w,
-			"The uploaded image is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Validate the image extension.
-	extension := strings.ToLower(
-		filepath.Ext(header.Filename),
-	)
-
-	switch extension {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-		// Supported image format.
-	default:
-		http.Error(
-			w,
-			"Unsupported image format.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Create the temporary upload directory.
-	if err := os.MkdirAll(
-		temporaryUploadDirectory,
-		0755,
-	); err != nil {
-		log.Println(
-			"Error creating temporary upload directory:",
-			err,
+			r.Body,
+			MaxUploadSize,
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		// Retrieve the uploaded file.
+		file, header, err := r.FormFile("imageFile")
+		if err != nil {
+			log.Println("Error retrieving image:", err)
+			http.Error(
+				w,
+				"An image file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer file.Close()
 
-	uploadID := uuid.New().String()
+		// Reject empty files.
+		if header.Size == 0 {
+			http.Error(
+				w,
+				"The uploaded image is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	tempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+extension,
-	)
-
-	// Create a temporary file.
-	tempFile, err := os.Create(tempPath)
-	if err != nil {
-		log.Println(
-			"Error creating temporary image file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	// Save the uploaded image.
-	if _, err := io.Copy(tempFile, file); err != nil {
-		tempFile.Close()
-		os.Remove(tempPath)
-
-		log.Println(
-			"Error saving temporary image:",
-			err,
+		// Validate the image extension.
+		extension := strings.ToLower(
+			filepath.Ext(header.Filename),
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
+		switch extension {
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+			// Supported image format.
+		default:
+			http.Error(
+				w,
+				"Unsupported image format.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Validate the image type by reading the first few bytes.
+		if err := validateImageType(file); err != nil {
+			http.Error(
+				w,
+				"Unsupported image type.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Create the temporary upload directory.
+		if err := os.MkdirAll(
+			temporaryUploadDirectory,
+			0755,
+		); err != nil {
+			log.Println(
+				"Error creating temporary upload directory:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		uploadID := uuid.New().String()
+
+		tempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+extension,
 		)
-		return
-	}
 
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempPath)
+		// Create a temporary file.
+		tempFile, err := os.Create(tempPath)
+		if err != nil {
+			log.Println(
+				"Error creating temporary image file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-		log.Println(
-			"Error closing temporary image file:",
-			err,
+		// Save the uploaded image.
+		if _, err := io.Copy(tempFile, file); err != nil {
+			tempFile.Close()
+			os.Remove(tempPath)
+			log.Println(
+				"Error saving temporary image:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := tempFile.Close(); err != nil {
+			os.Remove(tempPath)
+			log.Println(
+				"Error closing temporary image file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Record ownership of the temporary upload.
+		if _, err := db.Exec(`
+		INSERT INTO temporary_uploads (upload_id, session_id, created_at)
+		VALUES ($1, $2, $3)
+	`, uploadID, sessionID, time.Now()); err != nil {
+			os.Remove(tempPath)
+			log.Println(
+				"Error recording temporary image upload:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(
-		inspectionResponse{
-			UploadID: uploadID,
-		},
-	); err != nil {
-		log.Println(
-			"Error encoding image upload response:",
-			err,
-		)
+		if err := json.NewEncoder(w).Encode(
+			inspectionResponse{
+				UploadID: uploadID,
+			},
+		); err != nil {
+			log.Println(
+				"Error encoding image upload response:",
+				err,
+			)
+		}
 	}
 }
 
 // RouteUploadHandler handles route file uploads for route optimization jobs.
-func RouteUploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(
+func RouteUploadHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(
+				w,
+				"Method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		sessionID := identity.SessionID
+
+		// Limit the total request size.
+		r.Body = http.MaxBytesReader(
 			w,
-			"Method not allowed",
-			http.StatusMethodNotAllowed,
-		)
-		return
-	}
-
-	// Limit the total request size.
-	r.Body = http.MaxBytesReader(
-		w,
-		r.Body,
-		MaxUploadSize,
-	)
-
-	// Retrieve the route CSV.
-	routeFile, routeHeader, err := r.FormFile("routeFile")
-	if err != nil {
-		http.Error(
-			w,
-			"A route CSV file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer routeFile.Close()
-
-	// Retrieve the distance-table CSV.
-	distanceFile, distanceHeader, err := r.FormFile("distanceFile")
-	if err != nil {
-		routeFile.Close()
-
-		http.Error(
-			w,
-			"A distance table CSV file is required.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-	defer distanceFile.Close()
-
-	// Reject empty files.
-	if routeHeader.Size == 0 {
-		http.Error(
-			w,
-			"The route CSV is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if distanceHeader.Size == 0 {
-		http.Error(
-			w,
-			"The distance table CSV is empty.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Validate file extensions.
-	if strings.ToLower(filepath.Ext(routeHeader.Filename)) != ".csv" {
-		http.Error(
-			w,
-			"Only CSV route files are accepted.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if strings.ToLower(filepath.Ext(distanceHeader.Filename)) != ".csv" {
-		http.Error(
-			w,
-			"Only CSV distance table files are accepted.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	// Create the temporary upload directory.
-	if err := os.MkdirAll(
-		temporaryUploadDirectory,
-		0755,
-	); err != nil {
-		log.Println(
-			"Error creating temporary upload directory:",
-			err,
+			r.Body,
+			MaxUploadSize,
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		// Retrieve the route CSV.
+		routeFile, routeHeader, err := r.FormFile("routeFile")
+		if err != nil {
+			http.Error(
+				w,
+				"A route CSV file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer routeFile.Close()
 
-	uploadID := uuid.New().String()
+		// Retrieve the distance-table CSV.
+		distanceFile, distanceHeader, err := r.FormFile("distanceFile")
+		if err != nil {
+			routeFile.Close()
+			http.Error(
+				w,
+				"A distance table CSV file is required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+		defer distanceFile.Close()
 
-	routeTempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+"_route.csv",
-	)
+		// Reject empty files.
+		if routeHeader.Size == 0 {
+			http.Error(
+				w,
+				"The route CSV is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	distanceTempPath := filepath.Join(
-		temporaryUploadDirectory,
-		uploadID+"_distances.csv",
-	)
+		if distanceHeader.Size == 0 {
+			http.Error(
+				w,
+				"The distance table CSV is empty.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	// Save the route CSV.
-	routeTempFile, err := os.Create(routeTempPath)
-	if err != nil {
-		log.Println(
-			"Error creating temporary route file:",
-			err,
-		)
+		// Validate file extensions.
+		if strings.ToLower(filepath.Ext(routeHeader.Filename)) != ".csv" {
+			http.Error(
+				w,
+				"Only CSV route files are accepted.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
+		if strings.ToLower(filepath.Ext(distanceHeader.Filename)) != ".csv" {
+			http.Error(
+				w,
+				"Only CSV distance table files are accepted.",
+				http.StatusBadRequest,
+			)
+			return
+		}
 
-	if _, err := io.Copy(routeTempFile, routeFile); err != nil {
-		routeTempFile.Close()
-		os.Remove(routeTempPath)
+		// Create the temporary upload directory.
+		if err := os.MkdirAll(
+			temporaryUploadDirectory,
+			0755,
+		); err != nil {
+			log.Println(
+				"Error creating temporary upload directory:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-		log.Println(
-			"Error saving temporary route file:",
-			err,
-		)
+		uploadID := uuid.New().String()
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if err := routeTempFile.Close(); err != nil {
-		os.Remove(routeTempPath)
-
-		log.Println(
-			"Error closing temporary route file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	// Save the distance table CSV.
-	distanceTempFile, err := os.Create(distanceTempPath)
-	if err != nil {
-		os.Remove(routeTempPath)
-
-		log.Println(
-			"Error creating temporary distance table file:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if _, err := io.Copy(distanceTempFile, distanceFile); err != nil {
-		distanceTempFile.Close()
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Error saving temporary distance table file:",
-			err,
+		routeTempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+"_route.csv",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	if err := distanceTempFile.Close(); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Error closing temporary distance table file:",
-			err,
+		distanceTempPath := filepath.Join(
+			temporaryUploadDirectory,
+			uploadID+"_distances.csv",
 		)
 
-		http.Error(
-			w,
-			"Internal server error",
-			http.StatusInternalServerError,
+		// Save the route CSV.
+		routeTempFile, err := os.Create(routeTempPath)
+		if err != nil {
+			log.Println(
+				"Error creating temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if _, err := io.Copy(routeTempFile, routeFile); err != nil {
+			routeTempFile.Close()
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error saving temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := routeTempFile.Close(); err != nil {
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error closing temporary route file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Save the distance table CSV.
+		distanceTempFile, err := os.Create(distanceTempPath)
+		if err != nil {
+			os.Remove(routeTempPath)
+			log.Println(
+				"Error creating temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if _, err := io.Copy(distanceTempFile, distanceFile); err != nil {
+			distanceTempFile.Close()
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error saving temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		if err := distanceTempFile.Close(); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error closing temporary distance table file:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		// Verify that both files are valid CSV files.
+		if err := jobs.ValidateCSV(routeTempPath); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Invalid route CSV:",
+				err,
+			)
+			http.Error(
+				w,
+				"The uploaded route file is not a valid CSV file.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if err := jobs.ValidateCSV(distanceTempPath); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Invalid distance table CSV:",
+				err,
+			)
+			http.Error(
+				w,
+				"The uploaded distance table is not a valid CSV file.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		log.Printf(
+			"ABOUT TO RECORD TEMPORARY UPLOAD: uploadID=%s, sessionID=%d",
+			uploadID,
+			sessionID,
 		)
-		return
-	}
+		// Record ownership of the temporary upload.
+		if _, err := db.Exec(`
+		INSERT INTO temporary_uploads (upload_id, session_id, created_at)
+		VALUES ($1, $2, $3)
+	`, uploadID, sessionID, time.Now()); err != nil {
+			os.Remove(routeTempPath)
+			os.Remove(distanceTempPath)
+			log.Println(
+				"Error recording temporary upload:",
+				err,
+			)
+			http.Error(
+				w,
+				"Internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
 
-	// Verify that both files are valid CSV files.
-	if err := jobs.ValidateCSV(routeTempPath); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
+		log.Printf("Temporary upload recorded: uploadID=%s, sessionID=%d", uploadID, sessionID)
 
-		log.Println(
-			"Invalid route CSV:",
-			err,
+		w.Header().Set(
+			"Content-Type",
+			"application/json",
 		)
 
-		http.Error(
-			w,
-			"The uploaded route file is not a valid CSV file.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	if err := jobs.ValidateCSV(distanceTempPath); err != nil {
-		os.Remove(routeTempPath)
-		os.Remove(distanceTempPath)
-
-		log.Println(
-			"Invalid distance table CSV:",
-			err,
-		)
-
-		http.Error(
-			w,
-			"The uploaded distance table is not a valid CSV file.",
-			http.StatusBadRequest,
-		)
-		return
-	}
-
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(
-		struct {
-			UploadID string `json:"upload_id"`
-		}{
-			UploadID: uploadID,
-		},
-	); err != nil {
-		log.Println(
-			"Error encoding route upload response:",
-			err,
-		)
+		if err := json.NewEncoder(w).Encode(
+			struct {
+				UploadID string `json:"upload_id"`
+			}{
+				UploadID: uploadID,
+			},
+		); err != nil {
+			log.Println(
+				"Error encoding route upload response:",
+				err,
+			)
+		}
 	}
 }
 
@@ -2039,17 +2245,31 @@ var errRouteNotUploaded = errors.New(
 	"route files have not been uploaded",
 )
 
-func getTemporaryRouteFiles(uploadID string) (
-	string,
-	string,
-	error,
-) {
+func getTemporaryRouteFiles(
+	db *sql.DB,
+	uploadID string,
+	sessionID int64,
+) (string, string, error) {
+
 	if uploadID == "" {
 		return "", "", errRouteNotUploaded
 	}
 
 	if _, err := uuid.Parse(uploadID); err != nil {
 		return "", "", errInvalidUploadID
+	}
+
+	belongs, err := temporaryUploadBelongsToSession(
+		db,
+		uploadID,
+		sessionID,
+	)
+	if err != nil {
+		return "", "", err
+	}
+
+	if !belongs {
+		return "", "", os.ErrNotExist
 	}
 
 	routePath := filepath.Join(
@@ -2074,7 +2294,7 @@ func getTemporaryRouteFiles(uploadID string) (
 }
 
 // getTemporaryDataset validates the upload ID and returns the temporary dataset path.
-func getTemporaryDataset(uploadID string) (string, error) {
+func getTemporaryDataset(db *sql.DB, uploadID string, sessionID int64) (string, error) {
 	if uploadID == "" {
 		return "", errDatasetNotInspected
 	}
@@ -2082,6 +2302,19 @@ func getTemporaryDataset(uploadID string) (string, error) {
 	// Make sure the upload ID is a valid UUID.
 	if _, err := uuid.Parse(uploadID); err != nil {
 		return "", errInvalidUploadID
+	}
+
+	belongs, err := temporaryUploadBelongsToSession(
+		db,
+		uploadID,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if !belongs {
+		return "", os.ErrNotExist
 	}
 
 	tempPath := filepath.Join(
@@ -2099,7 +2332,7 @@ func getTemporaryDataset(uploadID string) (string, error) {
 var errImageNotInspected = errors.New("image has not been inspected")
 
 // getTemporaryImage validates the upload ID and returns the temporary image path.
-func getTemporaryImage(uploadID string) (string, error) {
+func getTemporaryImage(db *sql.DB, uploadID string, sessionID int64) (string, error) {
 	if uploadID == "" {
 		return "", errImageNotInspected
 	}
@@ -2107,6 +2340,19 @@ func getTemporaryImage(uploadID string) (string, error) {
 	// Make sure the upload ID is a valid UUID.
 	if _, err := uuid.Parse(uploadID); err != nil {
 		return "", errInvalidUploadID
+	}
+
+	belongs, err := temporaryUploadBelongsToSession(
+		db,
+		uploadID,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if !belongs {
+		return "", os.ErrNotExist
 	}
 
 	matches, err := filepath.Glob(
@@ -2201,7 +2447,7 @@ func VisualizationHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -2334,7 +2580,7 @@ func ImageResultHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -2465,4 +2711,425 @@ func ImageResultHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			)
 		}
 	}
+}
+
+func validateImageType(file multipart.File) error {
+	// Read the first 512 bytes to detect the content type.
+	buffer := make([]byte, 512)
+
+	if _, err := file.Read(buffer); err != nil {
+		return fmt.Errorf("failed to read image file: %w", err)
+	}
+
+	contentType := http.DetectContentType(buffer)
+
+	switch contentType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		// Supported image format.
+	default:
+		return fmt.Errorf("unsupported image content type: %s", contentType)
+	}
+
+	// Reset the file pointer to the beginning for further processing.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("failed to reset file pointer: %w", err)
+	}
+
+	return nil
+}
+
+func GuestSessionHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Create a new guest session.
+		sessionToken, err := auth.GenerateSessionToken()
+		if err != nil {
+			log.Println("Error generating session token:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Store the guest session in the database.
+		if err := auth.StoreGuestSession(db, sessionToken); err != nil {
+			log.Println("Error storing guest session:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Set the session cookie for the guest user.
+		auth.SetSessionCookie(w, sessionToken)
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func temporaryUploadBelongsToSession(db *sql.DB, uploadID string, sessionID int64) (bool, error) {
+
+	var exists bool
+
+	err := db.QueryRow(`
+	SELECT EXISTS (
+		SELECT 1
+		FROM temporary_uploads
+		WHERE upload_id = $1
+		  AND session_id = $2
+	)
+`, uploadID, sessionID).Scan(&exists)
+
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
+func ownerFromRequest(r *http.Request) (jobs.JobOwner, error) {
+	identity, ok := auth.IdentityFromContext(r)
+	if !ok {
+		return jobs.JobOwner{}, errors.New("request identity not found")
+	}
+
+	owner := jobs.JobOwner{
+		UserID: identity.UserID,
+	}
+
+	if identity.UserID == nil {
+		sessionID := identity.SessionID
+		owner.SessionID = &sessionID
+	}
+
+	return owner, nil
+}
+
+func getOwnedJob(r *http.Request, db *sql.DB, jobID int64) (*jobs.Job, error) {
+	owner, err := ownerFromRequest(r)
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := jobs.GetJobForOwner(db, jobID, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
+}
+
+func RegisterHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			err := RegisterTemplate.Execute(w, nil)
+			if err != nil {
+				log.Println("Error rendering register template:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID != nil {
+			http.Error(w, "Already logged in.", http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(r.FormValue("username"))
+		password := r.FormValue("password")
+
+		if username == "" || password == "" {
+			http.Error(
+				w,
+				"Username and password are required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if len(username) > 20 {
+			http.Error(
+				w,
+				"Username must be 20 characters or fewer.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if len(password) > 50 {
+			http.Error(
+				w,
+				"Password must be 50 characters or fewer.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if !validUsername(username) {
+			http.Error(
+				w,
+				"Username may contain only letters, numbers, and underscores.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		passwordHash, err := bcrypt.GenerateFromPassword(
+			[]byte(password),
+			bcrypt.DefaultCost,
+		)
+		if err != nil {
+			log.Println("Error hashing password:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Println("Error starting registration transaction:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		var userID int64
+		err = tx.QueryRow(
+			`
+			INSERT INTO users (
+				username,
+				password_hash,
+				created_at
+			)
+			VALUES ($1, $2, $3)
+			RETURNING id
+			`,
+			username,
+			string(passwordHash),
+			time.Now(),
+		).Scan(&userID)
+		if err != nil {
+			if strings.Contains(err.Error(), "users_username_key") {
+				http.Error(
+					w,
+					"Username is already taken.",
+					http.StatusConflict,
+				)
+				return
+			}
+
+			log.Println("Error creating user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(
+			`
+			UPDATE sessions
+			SET user_id = $1
+			WHERE id = $2
+			  AND user_id IS NULL
+			`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error associating session with user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(
+			`
+			UPDATE jobs
+			SET user_id = $1,
+			    session_id = NULL
+			WHERE session_id = $2
+			`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error transferring guest jobs:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Println("Error committing registration:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func LoginHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			err := LoginTemplate.Execute(w, nil)
+			if err != nil {
+				log.Println("Error rendering login template:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID != nil {
+			http.Error(w, "Already logged in.", http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(r.FormValue("username"))
+		password := r.FormValue("password")
+
+		if username == "" || password == "" {
+			http.Error(
+				w,
+				"Username and password are required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		var userID int64
+		var passwordHash string
+
+		err := db.QueryRow(
+			`SELECT id, password_hash FROM users WHERE username = $1`,
+			username,
+		).Scan(&userID, &passwordHash)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(
+					w,
+					"Invalid username or password.",
+					http.StatusUnauthorized,
+				)
+				return
+			}
+
+			log.Println("Error querying user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+			http.Error(
+				w,
+				"Invalid username or password.",
+				http.StatusUnauthorized,
+			)
+			return
+		}
+
+		result, err := db.Exec(
+			`
+   		UPDATE sessions
+    	SET user_id = $1
+    	WHERE id = $2
+      	AND user_id IS NULL
+    	`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error associating session with user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Println("Error checking session update:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected != 1 {
+			http.Error(w, "Invalid session.", http.StatusUnauthorized)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func LogoutHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID == nil {
+			http.Error(w, "Not logged in.", http.StatusBadRequest)
+			return
+		}
+
+		result, err := db.Exec(
+			`UPDATE sessions SET user_id = NULL WHERE id = $1 AND user_id = $2`,
+			identity.SessionID,
+			*identity.UserID,
+		)
+		if err != nil {
+			log.Println("Error disassociating session from user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Println("Error checking session update:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected != 1 {
+			http.Error(w, "Invalid session.", http.StatusUnauthorized)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func validUsername(username string) bool {
+	for _, character := range username {
+		if !unicode.IsLetter(character) &&
+			!unicode.IsDigit(character) &&
+			character != '_' {
+			return false
+		}
+	}
+
+	return true
 }

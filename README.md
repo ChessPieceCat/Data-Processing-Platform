@@ -16,6 +16,16 @@ The current implementation supports:
 - Route optimization configuration
 - Temporary upload handling and per-job object storage
 - PostgreSQL-backed job records
+- User accounts with username/password authentication
+- Secure guest sessions for unauthenticated users
+- Session-based user and guest identity tracking
+- Per-user and per-session job ownership
+- Guest-to-account job ownership transfer during registration
+- Owner-specific job history and result access
+- Authorization checks preventing cross-user and cross-session job access
+- Temporary upload ownership tied to the current session
+- Secure session cookies with HTTP-only and SameSite protections
+- Logout and session authentication state management
 - Redis Streams for asynchronous job processing
 - Separate Go HTTP server and Go worker processes
 - Generic job processing and dispatch based on job type
@@ -23,7 +33,6 @@ The current implementation supports:
 - Environment-based selection between local and S3 object storage
 - Shared persistent job input, configuration, result, and artifact storage between the application and worker
 - Job lifecycle tracking:
-
   - queued
   - processing
   - completed
@@ -300,6 +309,26 @@ Persistent job inputs, configuration, results, and other job artifacts are store
 
 ---
 
+## Authentication and Authorization
+
+The platform supports both unauthenticated guest use and registered user accounts.
+
+Guest users are identified through a secure server-side session. A browser receives a cryptographically random session token stored in an HTTP-only session cookie. Guest jobs are associated with the session that created them.
+
+Registered users authenticate with a username and password. Passwords are stored as secure password hashes rather than plaintext credentials. Authentication state is associated with the user's server-side session.
+
+Each job has exactly one owner: either a registered user or a guest session. Job history, results, visualizations, and downloadable artifacts are restricted to the current owner's jobs.
+
+When a guest registers for an account, jobs created during that guest session are transferred to the newly created account. This allows users to begin using the platform without an account and create an account later without losing their existing jobs.
+
+Authorization checks are applied to job-related endpoints before returning job results or downloadable artifacts. A job ID alone is not sufficient to access another user's data.
+
+Temporary uploads are also associated with the current session and are validated against that session before they can be submitted for processing.
+
+The application distinguishes between authentication failures, invalid user input, missing resources, and internal application failures. Internal errors are logged server-side while client-facing responses avoid exposing database, filesystem, process, or infrastructure details.
+
+---
+
 ## Project Structure
 
 ```text
@@ -314,6 +343,10 @@ cmd/worker/
 internal/database/
 
     PostgreSQL connection and embedded migrations
+
+internal/auth/
+
+    Session handling, identity, authentication, and session middleware
 
 internal/http/
 
@@ -548,7 +581,9 @@ The server listens on:
 http://localhost:8082
 ```
 
-The web interface supports submitting dataset, image, and route jobs.
+The web interface supports submitting dataset, image, and route jobs with optional guest or registered-user accounts.
+
+Guest users can submit jobs without registering. Registered users can log in to access their own job history and results.
 
 For dataset jobs, the interface allows a CSV to be inspected before submission. Modeling options include target selection, feature-selection mode, Random Forest configuration, and requested visualizations.
 
@@ -671,7 +706,23 @@ The route test suite covers:
 - route feasibility checking
 - processor orchestration
 
-The Go test suite covers application handlers, job processing, configuration, Redis behavior, worker behavior, database integration, and route integration.
+The Go test suite covers application handlers, authentication and session behavior, authorization and ownership checks, safe client-facing error handling, job processing, configuration, Redis behavior, worker behavior, database integration, and route integration.
+
+#### Authentication and Authorization Tests
+
+The application tests include:
+
+- registration and username validation
+- password hashing and authentication
+- login and logout behavior
+- guest session creation and persistence
+- guest-to-account job ownership transfer
+- per-user and per-session job isolation
+- cross-user job access prevention
+- cross-session guest access prevention
+- authorization of result and artifact downloads
+- temporary-upload ownership validation
+- safe client-facing error responses
 
 Worker tests additionally cover:
 
@@ -893,6 +944,8 @@ Redis uses at-least-once delivery semantics, so duplicate delivery is possible. 
 ## Current Scope
 
 This repository represents the first implementation of the platform.
+
+The platform supports optional user accounts while preserving guest access. Registered users and guest sessions have isolated job histories, and job results and artifacts are authorized against the current identity before access is granted.
 
 The current architecture separates generic job orchestration from domain-specific processing. The Go HTTP server handles API requests and submission, Redis and the worker pool handle asynchronous delivery, `ProcessJob` handles the common job lifecycle and processor dispatching, and individual processors handle job-specific execution.
 

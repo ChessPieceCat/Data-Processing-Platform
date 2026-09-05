@@ -80,7 +80,8 @@ func setupWorkerTest(
 func createTestJob(t *testing.T, db *sql.DB, status string) int64 {
 	t.Helper()
 
-	jobID, err := jobs.CreateJob(db, "dataset")
+	owner := createTestOwner(t, db)
+	jobID, err := jobs.CreateJob(db, "dataset", owner)
 	if err != nil {
 		t.Fatalf("failed to create test job: %v", err)
 	}
@@ -853,4 +854,36 @@ func TestRunWorkerShutsDownWhenContextIsCancelled(t *testing.T) {
 func createTestMetrics() *metrics.Metrics {
 	registry := prometheus.NewRegistry()
 	return metrics.NewMetrics(registry)
+}
+
+func createTestOwner(t *testing.T, db *sql.DB) jobs.JobOwner {
+	t.Helper()
+
+	token := fmt.Sprintf("test-session-%d", time.Now().UnixNano())
+
+	var sessionID int64
+	err := db.QueryRow(`
+		INSERT INTO sessions (token, created_at, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`,
+		token,
+		time.Now(),
+		time.Now().Add(24*time.Hour),
+	).Scan(&sessionID)
+
+	if err != nil {
+		t.Fatalf("failed to create test session: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(
+			"DELETE FROM sessions WHERE id = $1",
+			sessionID,
+		)
+	})
+
+	return jobs.JobOwner{
+		SessionID: &sessionID,
+	}
 }

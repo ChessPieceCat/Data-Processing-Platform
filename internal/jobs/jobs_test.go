@@ -113,31 +113,26 @@ func clearJobsTable(t *testing.T, db *sql.DB) {
 
 // createTestJob creates a dataset job and registers cleanup for the database row.*
 
-func createTestJob(t *testing.T, db *sql.DB) int64 {
-
+func createTestJob(t *testing.T, db *sql.DB, owner JobOwner) int64 {
 	t.Helper()
 
-	jobID, err := CreateJob(db, "dataset")
-
+	jobID, err := CreateJob(
+		db,
+		"dataset",
+		owner,
+	)
 	if err != nil {
-
 		t.Fatalf("CreateJob failed: %v", err)
-
 	}
 
 	t.Cleanup(func() {
-
 		_, _ = db.Exec(
-
 			"DELETE FROM jobs WHERE id = $1",
-
 			jobID,
 		)
-
 	})
 
 	return jobID
-
 }
 
 // TestCreateJob verifies that a new job is created with the expected*
@@ -147,8 +142,8 @@ func createTestJob(t *testing.T, db *sql.DB) int64 {
 func TestCreateJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if jobID <= 0 {
 
@@ -231,14 +226,14 @@ func TestGetJobNotFound(t *testing.T) {
 func TestGetJobs(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
-	firstID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	firstID := createTestJob(t, db, owner)
 
 	time.Sleep(time.Millisecond)
 
-	secondID := createTestJob(t, db)
+	secondID := createTestJob(t, db, owner)
 
-	jobList, err := GetJobs(db)
+	jobList, err := GetJobs(db, owner)
 
 	if err != nil {
 
@@ -320,7 +315,8 @@ func TestStartJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if err := startJob(db, jobID); err != nil {
 
@@ -363,7 +359,8 @@ func TestCompleteJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	if err := startJob(db, jobID); err != nil {
 
@@ -418,7 +415,8 @@ func TestFailJob(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	errorMessage := "test processing failure"
 
@@ -474,7 +472,8 @@ func TestSaveResultReference(t *testing.T) {
 
 	db := setupTestDatabase(t)
 
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	resultPath := "uploads/123/results.json"
 
@@ -884,7 +883,8 @@ func TestRunProcessorMissingInput(t *testing.T) {
 func TestProcessJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputKey := fmt.Sprintf(
 		"jobs/%d/dataset.csv",
@@ -1024,10 +1024,12 @@ func TestProcessJobSuccess(t *testing.T) {
 func TestProcessImageJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
 
 	jobID, err := CreateJob(
 		db,
 		"image",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf("CreateJob failed: %v", err)
@@ -1220,7 +1222,8 @@ func TestProcessImageJobSuccess(t *testing.T) {
 func TestProcessJobFailure(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputReference := fmt.Sprintf(
 		"jobs/%d/does-not-exist.csv",
@@ -1283,7 +1286,8 @@ func TestProcessJobFailure(t *testing.T) {
 func TestProcessJobMissingInput(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 	m := createTestMetrics()
 	err := ProcessJob(
 		db,
@@ -1448,7 +1452,8 @@ func TestEnqueueJob(t *testing.T) {
 func TestProcessJobUnsupportedType(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
-	jobID := createTestJob(t, db)
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
 
 	inputKey := fmt.Sprintf(
 		"jobs/%d/test-input.csv",
@@ -1536,10 +1541,12 @@ func TestProcessJobUnsupportedType(t *testing.T) {
 func TestCreateRouteJob(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
 
 	jobID, err := CreateJob(
 		db,
 		"route",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -1645,9 +1652,12 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 	db := setupTestDatabase(t)
 	store := storage.NewLocalStorage(t.TempDir())
 
+	owner := createTestOwner(t, db)
+
 	jobID, err := CreateJob(
 		db,
 		"route",
+		owner,
 	)
 	if err != nil {
 		t.Fatalf(
@@ -1858,12 +1868,14 @@ func TestProcessRouteJobSuccess(t *testing.T) {
 func TestStartJobPreventsDuplicateProcessing(t *testing.T) {
 
 	db := setupTestDatabase(t)
-
+	owner := createTestOwner(t, db)
 	jobID := createTestJob(
 
 		t,
 
 		db,
+
+		owner,
 	)
 
 	var wg sync.WaitGroup
@@ -1982,12 +1994,15 @@ func TestCreateJobWithLimit(t *testing.T) {
 
 	clearJobsTable(t, db)
 
+	owner := createTestOwner(t, db)
+
 	for i := 0; i < MaxOutstandingJobs; i++ {
 		m := createTestMetrics()
 		if _, err := CreateJobWithLimit(
 			db,
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2009,6 +2024,7 @@ func TestCreateJobWithLimit(t *testing.T) {
 
 		"dataset",
 		m,
+		owner,
 	); !errors.Is(err, ErrJobQueueFull) {
 
 		t.Fatalf(
@@ -2029,7 +2045,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 ) {
 
 	db := setupTestDatabase(t)
-
+	owner := createTestOwner(t, db)
 	clearJobsTable(t, db)
 	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs; i++ {
@@ -2040,6 +2056,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2088,6 +2105,7 @@ func TestCreateJobWithLimitIgnoresCompletedJobs(
 
 		"dataset",
 		m,
+		owner,
 	); err != nil {
 
 		t.Fatalf(
@@ -2112,13 +2130,14 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 	clearJobsTable(t, db)
 	m := createTestMetrics()
 	for i := 0; i < MaxOutstandingJobs-1; i++ {
-
+		owner := createTestOwner(t, db)
 		if _, err := CreateJobWithLimit(
 
 			db,
 
 			"dataset",
 			m,
+			owner,
 		); err != nil {
 
 			t.Fatalf(
@@ -2141,7 +2160,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 	results := make(chan error, 2)
 
 	for i := 0; i < 2; i++ {
-
+		owner := createTestOwner(t, db)
 		go func() {
 
 			defer wg.Done()
@@ -2152,6 +2171,7 @@ func TestCreateJobWithLimitPreventsConcurrentOverflow(
 
 				"dataset",
 				m,
+				owner,
 			)
 
 			results <- err
@@ -2324,5 +2344,219 @@ func TestClassifyError(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func createTestOwner(t *testing.T, db *sql.DB) JobOwner {
+	t.Helper()
+
+	token := fmt.Sprintf("test-session-%d", time.Now().UnixNano())
+
+	var sessionID int64
+	err := db.QueryRow(`
+		INSERT INTO sessions (token, created_at, expires_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`,
+		token,
+		time.Now(),
+		time.Now().Add(24*time.Hour),
+	).Scan(&sessionID)
+
+	if err != nil {
+		t.Fatalf("failed to create test session: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(
+			"DELETE FROM sessions WHERE id = $1",
+			sessionID,
+		)
+	})
+
+	return JobOwner{
+		SessionID: &sessionID,
+	}
+}
+
+func TestGetJobForOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
+
+	job, err := GetJobForOwner(db, jobID, owner)
+	if err != nil {
+		t.Fatalf("GetJobForOwner failed: %v", err)
+	}
+
+	if job.ID != jobID {
+		t.Fatalf(
+			"expected job ID %d, got %d",
+			jobID,
+			job.ID,
+		)
+	}
+}
+
+func TestGetJobForOwnerRejectsDifferentOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	owner := createTestOwner(t, db)
+	jobID := createTestJob(t, db, owner)
+
+	differentOwner := createTestOwner(t, db)
+
+	_, err := GetJobForOwner(db, jobID, differentOwner)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf(
+			"expected sql.ErrNoRows for different owner, got %v",
+			err,
+		)
+	}
+}
+
+func TestDeleteOldJobsPerOwner(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+
+	ownerOne := createTestOwner(t, db)
+	ownerTwo := createTestOwner(t, db)
+
+	var ownerOneJobs []int64
+	var ownerTwoJobs []int64
+
+	for i := 0; i < 11; i++ {
+		jobID := createTestJob(t, db, ownerOne)
+		ownerOneJobs = append(ownerOneJobs, jobID)
+
+		time.Sleep(time.Millisecond)
+	}
+
+	for i := 0; i < 11; i++ {
+		jobID := createTestJob(t, db, ownerTwo)
+		ownerTwoJobs = append(ownerTwoJobs, jobID)
+
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := DeleteOldJobs(db, 10, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	for i, jobID := range ownerOneJobs {
+		var exists bool
+
+		err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM jobs WHERE id = $1)`,
+			jobID,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("failed to check owner one job %d: %v", jobID, err)
+		}
+
+		if i == 0 {
+			if exists {
+				t.Fatalf("expected oldest owner one job %d to be deleted", jobID)
+			}
+		} else if !exists {
+			t.Fatalf("expected owner one job %d to be retained", jobID)
+		}
+	}
+
+	for i, jobID := range ownerTwoJobs {
+		var exists bool
+
+		err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM jobs WHERE id = $1)`,
+			jobID,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("failed to check owner two job %d: %v", jobID, err)
+		}
+
+		if i == 0 {
+			if exists {
+				t.Fatalf("expected oldest owner two job %d to be deleted", jobID)
+			}
+		} else if !exists {
+			t.Fatalf("expected owner two job %d to be retained", jobID)
+		}
+	}
+}
+
+func TestDeleteOldJobsKeepsJobsWithinLimit(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+
+	owner := createTestOwner(t, db)
+
+	for i := 0; i < 10; i++ {
+		createTestJob(t, db, owner)
+	}
+
+	if err := DeleteOldJobs(db, 10, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	jobList, err := GetJobs(db, owner)
+	if err != nil {
+		t.Fatalf("GetJobs failed: %v", err)
+	}
+
+	if len(jobList) != 10 {
+		t.Fatalf("expected 10 jobs to remain, got %d", len(jobList))
+	}
+}
+
+func TestDeleteOldJobsDeletesAssociatedStorage(t *testing.T) {
+	db := setupTestDatabase(t)
+	store := storage.NewLocalStorage(t.TempDir())
+	owner := createTestOwner(t, db)
+
+	// Create the job that should become old.
+	oldJobID := createTestJob(t, db, owner)
+
+	// Create some storage objects belonging to that job.
+	oldJobPrefix := fmt.Sprintf("jobs/%d/", oldJobID)
+
+	object1 := oldJobPrefix + "input.csv"
+	object2 := oldJobPrefix + "result.json"
+
+	if err := store.Put(context.Background(), object1, strings.NewReader("test input")); err != nil {
+		t.Fatalf("failed to create first storage object: %v", err)
+	}
+
+	if err := store.Put(context.Background(), object2, strings.NewReader("test result")); err != nil {
+		t.Fatalf("failed to create second storage object: %v", err)
+	}
+
+	// Create a newer job so the old job falls outside the retention limit.
+	createTestJob(t, db, owner)
+
+	if err := DeleteOldJobs(db, 1, store); err != nil {
+		t.Fatalf("DeleteOldJobs failed: %v", err)
+	}
+
+	// Verify the old job was deleted from the database.
+	if _, err := GetJob(db, oldJobID); err == nil {
+		t.Fatal("expected old job to be deleted")
+	}
+
+	// Verify all associated storage objects were deleted.
+	exists, err := store.Exists(context.Background(), object1)
+	if err != nil {
+		t.Fatalf("failed checking first storage object: %v", err)
+	}
+	if exists {
+		t.Fatal("expected first storage object to be deleted")
+	}
+
+	exists, err = store.Exists(context.Background(), object2)
+	if err != nil {
+		t.Fatalf("failed checking second storage object: %v", err)
+	}
+	if exists {
+		t.Fatal("expected second storage object to be deleted")
 	}
 }

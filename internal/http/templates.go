@@ -678,3 +678,89 @@ var RouteResultsTemplate = template.Must(
 </body>
 </html>`),
 )
+
+var RegisterTemplate = template.Must(template.New("register").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register</title>
+</head>
+<body>
+    <h1>Create an Account</h1>
+
+    <form action="/register" method="post">
+        <div>
+            <label for="username">Username:</label>
+            <input
+                type="text"
+                id="username"
+                name="username"
+                required
+            >
+        </div>
+
+        <div>
+            <label for="password">Password:</label>
+            <input
+                type="password"
+                id="password"
+                name="password"
+                required
+            >
+        </div>
+
+        <button type="submit">Register</button>
+    </form>
+
+    <p>
+        <a href="/">Back to Data Processing Platform</a>
+    </p>
+</body>
+</html>`))
+
+var LoginTemplate = template.Must(template.New("login").Parse(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+</head>
+<body>
+    <h1>Log In</h1>
+
+    <form action="/login" method="post">
+        <div>
+            <label for="username">Username:</label>
+            <input
+                type="text"
+                id="username"
+                name="username"
+                required
+            >
+        </div>
+
+        <div>
+            <label for="password">Password:</label>
+            <input
+                type="password"
+                id="password"
+                name="password"
+                required
+            >
+        </div>
+
+        <button type="submit">Log In</button>
+    </form>
+
+    <p>
+        <a href="/register">Create an account</a>
+    </p>
+
+    <p>
+        <a href="/">Back to Data Processing Platform</a>
+    </p>
+</body>
+</html>
+`))
