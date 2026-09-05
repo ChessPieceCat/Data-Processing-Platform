@@ -39,11 +39,33 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 			return
 		}
 
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			log.Println("Error retrieving request identity")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
 		owner, err := ownerFromRequest(r)
 		if err != nil {
 			log.Println("Error retrieving request identity:", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
+		}
+
+		var username string
+
+		if identity.UserID != nil {
+			err := db.QueryRow(
+				"SELECT username FROM users WHERE id = $1",
+				*identity.UserID,
+			).Scan(&username)
+
+			if err != nil {
+				log.Println("Error retrieving username:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
 		}
 
 		jobList, err := jobs.GetJobs(db, owner)
@@ -54,9 +76,13 @@ func IndexHandler(db *sql.DB, tmpl *template.Template) http.HandlerFunc {
 		}
 
 		data := struct {
-			Jobs []jobs.Job
+			Jobs          []jobs.Job
+			Authenticated bool
+			Username      string
 		}{
-			Jobs: jobList,
+			Jobs:          jobList,
+			Authenticated: identity.UserID != nil,
+			Username:      username,
 		}
 
 		if err := tmpl.Execute(w, data); err != nil {
