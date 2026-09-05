@@ -4241,3 +4241,86 @@ func TestLogoutHandler(t *testing.T) {
 		)
 	}
 }
+
+func TestResultsHandlerDoesNotLeakDatabaseErrors(t *testing.T) {
+	db := database.OpenDatabase()
+	if err := db.Ping(); err != nil {
+		db.Close()
+		t.Skipf("PostgreSQL is not available: %v", err)
+	}
+	db.Close()
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/results?id=1",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := ResultsHandler(
+		db,
+		nil,
+	)
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusInternalServerError,
+			rec.Code,
+		)
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "Internal server error") {
+		t.Fatalf(
+			"expected generic error message, got %q",
+			body,
+		)
+	}
+
+	for _, leaked := range []string{
+		"sql.ErrConnDone",
+		"database/sql",
+		"connection",
+		"postgres",
+	} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf(
+				"response appears to leak internal error information: %q",
+				body,
+			)
+		}
+	}
+}
+
+func TestResultsHandlerReturnsSafeValidationError(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/results?id=not-a-number",
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := ResultsHandler(nil, nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusBadRequest,
+			rec.Code,
+		)
+	}
+
+	if body := rec.Body.String(); body != "Invalid job ID\n" {
+		t.Fatalf(
+			"unexpected response body: %q",
+			body,
+		)
+	}
+}
