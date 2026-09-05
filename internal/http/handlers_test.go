@@ -3240,3 +3240,729 @@ func serveWithTestSession(
 
 	return sessionToken
 }
+
+func TestGetOwnedJob(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	// Create owner/session A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+	if err := auth.StoreGuestSession(db, sessionTokenA); err != nil {
+		t.Fatalf("failed to store session A: %v", err)
+	}
+
+	var sessionIDA int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenA,
+	).Scan(&sessionIDA); err != nil {
+		t.Fatalf("failed to retrieve session A ID: %v", err)
+	}
+
+	// Create owner/session B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+	if err := auth.StoreGuestSession(db, sessionTokenB); err != nil {
+		t.Fatalf("failed to store session B: %v", err)
+	}
+
+	var sessionIDB int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenB,
+	).Scan(&sessionIDB); err != nil {
+		t.Fatalf("failed to retrieve session B ID: %v", err)
+	}
+
+	ownerA := jobs.JobOwner{
+		SessionID: &sessionIDA,
+	}
+
+	jobID, err := jobs.CreateJob(db, "dataset", ownerA)
+	if err != nil {
+		t.Fatalf("failed to create test job: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM jobs WHERE id = $1`, jobID)
+		_, _ = db.Exec(`DELETE FROM sessions WHERE id IN ($1, $2)`, sessionIDA, sessionIDB)
+	})
+
+	t.Run("owner can access own job", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/results?id="+fmt.Sprintf("%d", jobID),
+			nil,
+		)
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenA,
+		})
+
+		auth.SessionMiddleware(
+			db,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, err := getOwnedJob(r, db, jobID)
+				if err != nil {
+					t.Fatalf("getOwnedJob returned error: %v", err)
+				}
+
+				if got.ID != jobID {
+					t.Fatalf("expected job ID %d, got %d", jobID, got.ID)
+				}
+			}),
+		).ServeHTTP(httptest.NewRecorder(), req)
+	})
+
+	t.Run("different owner cannot access job", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/results?id="+fmt.Sprintf("%d", jobID),
+			nil,
+		)
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenB,
+		})
+
+		rec := httptest.NewRecorder()
+
+		auth.SessionMiddleware(
+			db,
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := getOwnedJob(r, db, jobID)
+				if !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf(
+						"expected sql.ErrNoRows, got %v",
+						err,
+					)
+				}
+			}),
+		).ServeHTTP(rec, req)
+	})
+}
+
+func TestResultsHandlerOwnership(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	store := storage.NewLocalStorage(t.TempDir())
+
+	// Create owner/session A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenA); err != nil {
+		t.Fatalf("failed to store session A: %v", err)
+	}
+
+	var sessionIDA int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenA,
+	).Scan(&sessionIDA); err != nil {
+		t.Fatalf("failed to retrieve session A ID: %v", err)
+	}
+
+	// Create owner/session B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenB); err != nil {
+		t.Fatalf("failed to store session B: %v", err)
+	}
+
+	var sessionIDB int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenB,
+	).Scan(&sessionIDB); err != nil {
+		t.Fatalf("failed to retrieve session B ID: %v", err)
+	}
+
+	ownerA := jobs.JobOwner{
+		SessionID: &sessionIDA,
+	}
+
+	jobID, err := jobs.CreateJob(db, "dataset", ownerA)
+	if err != nil {
+		t.Fatalf("failed to create test job: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM jobs WHERE id = $1`, jobID)
+		_, _ = db.Exec(
+			`DELETE FROM sessions WHERE id IN ($1, $2)`,
+			sessionIDA,
+			sessionIDB,
+		)
+	})
+
+	handler := ResultsHandler(db, store)
+
+	t.Run("owner can access own results", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/results?id="+fmt.Sprintf("%d", jobID),
+			nil,
+		)
+
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenA,
+		})
+
+		rec := httptest.NewRecorder()
+
+		auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+		// The job belongs to this session, so it must not be rejected
+		// by the ownership check.
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("owner received 404 for own job")
+		}
+	})
+
+	t.Run("different session cannot access results", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/results?id="+fmt.Sprintf("%d", jobID),
+			nil,
+		)
+
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenB,
+		})
+
+		rec := httptest.NewRecorder()
+
+		auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf(
+				"expected 404 for job owned by different session, got %d",
+				rec.Code,
+			)
+		}
+	})
+}
+
+func TestProtectedJobHandlersRejectDifferentSession(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	store := storage.NewLocalStorage(t.TempDir())
+
+	// Create owner/session A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenA); err != nil {
+		t.Fatalf("failed to store session A: %v", err)
+	}
+
+	var sessionIDA int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenA,
+	).Scan(&sessionIDA); err != nil {
+		t.Fatalf("failed to retrieve session A ID: %v", err)
+	}
+
+	// Create different/session B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenB); err != nil {
+		t.Fatalf("failed to store session B: %v", err)
+	}
+
+	var sessionIDB int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenB,
+	).Scan(&sessionIDB); err != nil {
+		t.Fatalf("failed to retrieve session B ID: %v", err)
+	}
+
+	ownerA := jobs.JobOwner{
+		SessionID: &sessionIDA,
+	}
+
+	jobID, err := jobs.CreateJob(db, "dataset", ownerA)
+	if err != nil {
+		t.Fatalf("failed to create test job: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM jobs WHERE id = $1`, jobID)
+		_, _ = db.Exec(
+			`DELETE FROM sessions WHERE id IN ($1, $2)`,
+			sessionIDA,
+			sessionIDB,
+		)
+	})
+
+	type protectedHandler struct {
+		name    string
+		handler http.Handler
+		path    string
+	}
+
+	handlers := []protectedHandler{
+		{
+			name:    "visualization",
+			handler: VisualizationHandler(db, store),
+			path:    fmt.Sprintf("/results/visualization?id=%d&type=feature_distributions", jobID),
+		},
+		{
+			name:    "image result",
+			handler: ImageResultHandler(db, store),
+			path:    fmt.Sprintf("/results/image?id=%d&type=original", jobID),
+		},
+		{
+			name:    "result download",
+			handler: DownloadResultsHandler(db, store),
+			path:    fmt.Sprintf("/results/download?id=%d", jobID),
+		},
+		{
+			name:    "model download",
+			handler: DownloadModelHandler(db, store),
+			path:    fmt.Sprintf("/results/download/model?id=%d", jobID),
+		},
+		{
+			name:    "image metadata download",
+			handler: DownloadImageMetadataHandler(db, store),
+			path:    fmt.Sprintf("/results/download/metadata?id=%d", jobID),
+		},
+	}
+
+	for _, endpoint := range handlers {
+		t.Run(endpoint.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodGet,
+				endpoint.path,
+				nil,
+			)
+
+			req.AddCookie(&http.Cookie{
+				Name:  auth.SessionCookieName,
+				Value: sessionTokenB,
+			})
+
+			rec := httptest.NewRecorder()
+
+			auth.SessionMiddleware(db, endpoint.handler).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf(
+					"expected 404 when accessing another session's job, got %d",
+					rec.Code,
+				)
+			}
+		})
+	}
+}
+
+func TestDownloadResultsHandlerRejectsDifferentSession(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer db.Close()
+
+	store := storage.NewLocalStorage(t.TempDir())
+
+	// Create owner/session A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenA); err != nil {
+		t.Fatalf("failed to store session A: %v", err)
+	}
+
+	var sessionIDA int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenA,
+	).Scan(&sessionIDA); err != nil {
+		t.Fatalf("failed to retrieve session A ID: %v", err)
+	}
+
+	// Create different/session B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenB); err != nil {
+		t.Fatalf("failed to store session B: %v", err)
+	}
+
+	var sessionIDB int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenB,
+	).Scan(&sessionIDB); err != nil {
+		t.Fatalf("failed to retrieve session B ID: %v", err)
+	}
+
+	owner := jobs.JobOwner{
+		SessionID: &sessionIDA,
+	}
+
+	jobID, err := jobs.CreateJob(db, "dataset", owner)
+	if err != nil {
+		t.Fatalf("failed to create test job: %v", err)
+	}
+
+	resultKey := fmt.Sprintf("jobs/%d/results.json", jobID)
+	resultData := []byte(`{"secret":"session A data"}`)
+
+	if err := store.Put(
+		context.Background(),
+		resultKey,
+		bytes.NewReader(resultData),
+	); err != nil {
+		t.Fatalf("failed to store test result: %v", err)
+	}
+
+	// Mark the job completed and associate the result file.
+	_, err = db.Exec(
+		`UPDATE jobs
+		 SET status = 'completed',
+		     result_reference = $1
+		 WHERE id = $2`,
+		resultKey,
+		jobID,
+	)
+	if err != nil {
+		t.Fatalf("failed to update test job: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = jobs.DeleteJob(db, jobID, store)
+		_, _ = db.Exec(
+			`DELETE FROM sessions WHERE id IN ($1, $2)`,
+			sessionIDA,
+			sessionIDB,
+		)
+	})
+
+	handler := DownloadResultsHandler(db, store)
+
+	t.Run("owner can download result", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			fmt.Sprintf("/results/download?id=%d", jobID),
+			nil,
+		)
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenA,
+		})
+
+		rec := httptest.NewRecorder()
+
+		auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf(
+				"expected owner to receive 200, got %d",
+				rec.Code,
+			)
+		}
+
+		if rec.Body.String() != string(resultData) {
+			t.Fatalf(
+				"expected result data %q, got %q",
+				string(resultData),
+				rec.Body.String(),
+			)
+		}
+	})
+
+	t.Run("different session cannot download result", func(t *testing.T) {
+		req := httptest.NewRequest(
+			http.MethodGet,
+			fmt.Sprintf("/results/download?id=%d", jobID),
+			nil,
+		)
+		req.AddCookie(&http.Cookie{
+			Name:  auth.SessionCookieName,
+			Value: sessionTokenB,
+		})
+
+		rec := httptest.NewRecorder()
+
+		auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf(
+				"expected different session to receive 404, got %d",
+				rec.Code,
+			)
+		}
+
+		if rec.Body.String() == string(resultData) {
+			t.Fatal("different session received the protected result data")
+		}
+	})
+}
+
+func TestGetOwnedJobRejectsDifferentUser(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	userAName := "test-user-a-" + uuid.NewString()
+	userBName := "test-user-b-" + uuid.NewString()
+	// Create user A.
+	var userIDA int64
+	err := db.QueryRow(`
+	INSERT INTO users (username, password_hash, created_at)
+	VALUES ($1, $2, $3)
+	RETURNING id
+`, userAName, "test-hash-a", time.Now()).Scan(&userIDA)
+	if err != nil {
+		t.Fatalf("failed to create user A: %v", err)
+	}
+
+	// Create user B.
+	var userIDB int64
+	err = db.QueryRow(`
+	INSERT INTO users (username, password_hash, created_at)
+	VALUES ($1, $2, $3)
+	RETURNING id
+`, userBName, "test-hash-b", time.Now()).Scan(&userIDB)
+	if err != nil {
+		t.Fatalf("failed to create user B: %v", err)
+	}
+
+	// Create an authenticated session for user A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+
+	var sessionIDA int64
+	err = db.QueryRow(`
+		INSERT INTO sessions (token, user_id, expires_at, created_at)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, sessionTokenA, userIDA, time.Now().Add(24*time.Hour), time.Now()).Scan(&sessionIDA)
+	if err != nil {
+		t.Fatalf("failed to create session A: %v", err)
+	}
+
+	// Create an authenticated session for user B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+
+	_, err = db.Exec(`
+	INSERT INTO sessions (token, user_id, expires_at, created_at)
+	VALUES ($1, $2, $3, $4)
+	`, sessionTokenB, userIDB, time.Now().Add(24*time.Hour), time.Now())
+	if err != nil {
+		t.Fatalf("failed to create session B: %v", err)
+	}
+
+	// Create a job owned by user A.
+	ownerA := jobs.JobOwner{
+		UserID: &userIDA,
+	}
+
+	store := storage.NewLocalStorage(t.TempDir())
+
+	jobID, err := jobs.CreateJob(db, "dataset", ownerA)
+	if err != nil {
+		t.Fatalf("failed to create job: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = jobs.DeleteJob(db, jobID, store)
+	})
+
+	// User A should be able to access the job.
+	reqA := httptest.NewRequest(
+		http.MethodGet,
+		"/results?id="+fmt.Sprint(jobID),
+		nil,
+	)
+	reqA.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionTokenA,
+	})
+
+	var recA httptest.ResponseRecorder
+	auth.SessionMiddleware(
+		db,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			job, err := getOwnedJob(r, db, jobID)
+			if err != nil {
+				t.Fatalf("user A could not access their own job: %v", err)
+			}
+			if job.ID != jobID {
+				t.Fatalf("expected job ID %d, got %d", jobID, job.ID)
+			}
+			w.WriteHeader(http.StatusOK)
+		}),
+	).ServeHTTP(&recA, reqA)
+
+	if recA.Code != http.StatusOK {
+		t.Fatalf("expected user A status %d, got %d", http.StatusOK, recA.Code)
+	}
+
+	// User B should not be able to access user A's job.
+	reqB := httptest.NewRequest(
+		http.MethodGet,
+		"/results?id="+fmt.Sprint(jobID),
+		nil,
+	)
+	reqB.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionTokenB,
+	})
+
+	var recB httptest.ResponseRecorder
+	auth.SessionMiddleware(
+		db,
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, err := getOwnedJob(r, db, jobID)
+			if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf(
+					"expected sql.ErrNoRows for cross-user access, got %v",
+					err,
+				)
+			}
+			http.Error(w, "not found", http.StatusNotFound)
+		}),
+	).ServeHTTP(&recB, reqB)
+
+	if recB.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected user B status %d, got %d",
+			http.StatusNotFound,
+			recB.Code,
+		)
+	}
+}
+
+func TestCrossSessionGuestAccess(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	// Create guest session A.
+	sessionTokenA, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session A token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenA); err != nil {
+		t.Fatalf("failed to store session A: %v", err)
+	}
+
+	var sessionIDA int64
+	if err := db.QueryRow(
+		`SELECT id FROM sessions WHERE token = $1`,
+		sessionTokenA,
+	).Scan(&sessionIDA); err != nil {
+		t.Fatalf("failed to retrieve session A ID: %v", err)
+	}
+
+	// Create guest session B.
+	sessionTokenB, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session B token: %v", err)
+	}
+
+	if err := auth.StoreGuestSession(db, sessionTokenB); err != nil {
+		t.Fatalf("failed to store session B: %v", err)
+	}
+
+	// Create a job owned by guest session A.
+	ownerA := jobs.JobOwner{
+		SessionID: &sessionIDA,
+	}
+
+	jobID, err := jobs.CreateJob(db, "dataset", ownerA)
+	if err != nil {
+		t.Fatalf("failed to create job: %v", err)
+	}
+
+	store := storage.NewLocalStorage(t.TempDir())
+	t.Cleanup(func() {
+		_ = jobs.DeleteJob(db, jobID, store)
+	})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := getOwnedJob(r, db, jobID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+
+			t.Fatalf("unexpected ownership error: %v", err)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Session A should be able to access its own job.
+	reqA := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/results?id=%d", jobID),
+		nil,
+	)
+	reqA.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionTokenA,
+	})
+
+	recA := httptest.NewRecorder()
+
+	auth.SessionMiddleware(db, handler).ServeHTTP(recA, reqA)
+
+	if recA.Code != http.StatusOK {
+		t.Fatalf(
+			"expected session A status %d, got %d",
+			http.StatusOK,
+			recA.Code,
+		)
+	}
+
+	// Session B must not be able to access session A's job.
+	reqB := httptest.NewRequest(
+		http.MethodGet,
+		fmt.Sprintf("/results?id=%d", jobID),
+		nil,
+	)
+	reqB.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionTokenB,
+	})
+
+	recB := httptest.NewRecorder()
+
+	auth.SessionMiddleware(db, handler).ServeHTTP(recB, reqB)
+
+	if recB.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected session B status %d, got %d",
+			http.StatusNotFound,
+			recB.Code,
+		)
+	}
+}

@@ -71,7 +71,7 @@ func ResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -1215,7 +1215,7 @@ func DownloadResultsHandler(db *sql.DB, store storage.Storage) http.HandlerFunc 
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, fmt.Sprintf("job with ID %d not found", jobIDInt), http.StatusNotFound)
@@ -1271,7 +1271,7 @@ func DownloadModelHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(w, fmt.Sprintf("job with ID %d not found", jobIDInt), http.StatusNotFound)
@@ -1374,7 +1374,7 @@ func DownloadImageMetadataHandler(db *sql.DB, store storage.Storage) http.Handle
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -2353,7 +2353,7 @@ func VisualizationHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobIDInt)
+		job, err := getOwnedJob(r, db, jobIDInt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -2486,7 +2486,7 @@ func ImageResultHandler(db *sql.DB, store storage.Storage) http.HandlerFunc {
 			return
 		}
 
-		job, err := jobs.GetJob(db, jobID)
+		job, err := getOwnedJob(r, db, jobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				http.Error(
@@ -2709,4 +2709,18 @@ func ownerFromRequest(r *http.Request) (jobs.JobOwner, error) {
 	}
 
 	return owner, nil
+}
+
+func getOwnedJob(r *http.Request, db *sql.DB, jobID int64) (*jobs.Job, error) {
+	owner, err := ownerFromRequest(r)
+	if err != nil {
+		return nil, err
+	}
+
+	job, err := jobs.GetJobForOwner(db, jobID, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
 }
