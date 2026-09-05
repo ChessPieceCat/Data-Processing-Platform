@@ -39,6 +39,7 @@ import (
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/metrics"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
 
@@ -3963,6 +3964,242 @@ func TestCrossSessionGuestAccess(t *testing.T) {
 			"expected session B status %d, got %d",
 			http.StatusNotFound,
 			recB.Code,
+		)
+	}
+}
+
+func TestRegisterHandlerGet(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/register", nil)
+	rec := httptest.NewRecorder()
+
+	handler := RegisterHandler(nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "Create an Account") {
+		t.Error("expected registration page to contain 'Create an Account'")
+	}
+
+	if !strings.Contains(body, `name="username"`) {
+		t.Error("expected registration page to contain username field")
+	}
+
+	if !strings.Contains(body, `name="password"`) {
+		t.Error("expected registration page to contain password field")
+	}
+
+	if !strings.Contains(body, `action="/register"`) {
+		t.Error("expected registration form to submit to /register")
+	}
+}
+
+func TestLoginHandler(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	username := "testuser-" + uuid.NewString()
+	password := "testpassword"
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(password),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		t.Fatalf("failed to hash test password: %v", err)
+	}
+
+	var userID int64
+	err = db.QueryRow(
+		`
+		INSERT INTO users (
+			username,
+			password_hash,
+			created_at
+		)
+		VALUES ($1, $2, $3)
+		RETURNING id
+		`,
+		username,
+		string(passwordHash),
+		time.Now(),
+	).Scan(&userID)
+	if err != nil {
+		t.Fatalf("failed to create test user: %v", err)
+	}
+
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/login",
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+
+	rec := httptest.NewRecorder()
+
+	handler := LoginHandler(db)
+	serveWithTestSession(t, db, handler, rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusSeeOther,
+			rec.Code,
+		)
+	}
+
+	if location := rec.Header().Get("Location"); location != "/" {
+		t.Fatalf(
+			"expected redirect to /, got %q",
+			location,
+		)
+	}
+
+	cookie := req.Cookies()[0]
+	var sessionUserID *int64
+
+	err = db.QueryRow(
+		`
+		SELECT user_id
+		FROM sessions
+		WHERE token = $1
+		`,
+		cookie.Value,
+	).Scan(&sessionUserID)
+	if err != nil {
+		t.Fatalf("failed to query logged-in session: %v", err)
+	}
+
+	if sessionUserID == nil {
+		t.Fatal("expected session to be associated with a user")
+	}
+
+	if *sessionUserID != userID {
+		t.Fatalf(
+			"expected session user ID %d, got %d",
+			userID,
+			*sessionUserID,
+		)
+	}
+}
+
+func TestLogoutHandler(t *testing.T) {
+	db := setupTestDatabase(t)
+
+	username := "logout-test-user-" + uuid.NewString()
+	password := "logout-test-password"
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(password),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		t.Fatalf("failed to hash test password: %v", err)
+	}
+
+	var userID int64
+	err = db.QueryRow(
+		`
+		INSERT INTO users (
+			username,
+			password_hash,
+			created_at
+		)
+		VALUES ($1, $2, $3)
+		RETURNING id
+		`,
+		username,
+		string(passwordHash),
+		time.Now(),
+	).Scan(&userID)
+	if err != nil {
+		t.Fatalf("failed to create test user: %v", err)
+	}
+
+	sessionToken, err := auth.GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("failed to generate session token: %v", err)
+	}
+
+	var sessionID int64
+	err = db.QueryRow(
+		`
+		INSERT INTO sessions (
+			token,
+			user_id,
+			created_at,
+			expires_at
+		)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+		`,
+		sessionToken,
+		userID,
+		time.Now(),
+		time.Now().Add(24*time.Hour),
+	).Scan(&sessionID)
+	if err != nil {
+		t.Fatalf("failed to create test session: %v", err)
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/logout",
+		nil,
+	)
+	req.AddCookie(&http.Cookie{
+		Name:  auth.SessionCookieName,
+		Value: sessionToken,
+	})
+
+	rec := httptest.NewRecorder()
+
+	handler := LogoutHandler(db)
+	auth.SessionMiddleware(db, handler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusSeeOther,
+			rec.Code,
+		)
+	}
+
+	if location := rec.Header().Get("Location"); location != "/" {
+		t.Fatalf(
+			"expected redirect to /, got %q",
+			location,
+		)
+	}
+
+	var loggedInUserID *int64
+	err = db.QueryRow(
+		`
+		SELECT user_id
+		FROM sessions
+		WHERE id = $1
+		`,
+		sessionID,
+	).Scan(&loggedInUserID)
+	if err != nil {
+		t.Fatalf("failed to query session after logout: %v", err)
+	}
+
+	if loggedInUserID != nil {
+		t.Fatalf(
+			"expected session user ID to be NULL after logout, got %d",
+			*loggedInUserID,
 		)
 	}
 }

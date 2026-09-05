@@ -16,6 +16,9 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/auth"
 	"github.com/ChessPieceCat/Data-Processing-Platform/internal/jobs"
@@ -2723,4 +2726,319 @@ func getOwnedJob(r *http.Request, db *sql.DB, jobID int64) (*jobs.Job, error) {
 	}
 
 	return job, nil
+}
+
+func RegisterHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			err := RegisterTemplate.Execute(w, nil)
+			if err != nil {
+				log.Println("Error rendering register template:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID != nil {
+			http.Error(w, "Already logged in.", http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(r.FormValue("username"))
+		password := r.FormValue("password")
+
+		if username == "" || password == "" {
+			http.Error(
+				w,
+				"Username and password are required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if len(username) > 20 {
+			http.Error(
+				w,
+				"Username must be 20 characters or fewer.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if len(password) > 50 {
+			http.Error(
+				w,
+				"Password must be 50 characters or fewer.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		if !validUsername(username) {
+			http.Error(
+				w,
+				"Username may contain only letters, numbers, and underscores.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		passwordHash, err := bcrypt.GenerateFromPassword(
+			[]byte(password),
+			bcrypt.DefaultCost,
+		)
+		if err != nil {
+			log.Println("Error hashing password:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			log.Println("Error starting registration transaction:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		var userID int64
+		err = tx.QueryRow(
+			`
+			INSERT INTO users (
+				username,
+				password_hash,
+				created_at
+			)
+			VALUES ($1, $2, $3)
+			RETURNING id
+			`,
+			username,
+			string(passwordHash),
+			time.Now(),
+		).Scan(&userID)
+		if err != nil {
+			if strings.Contains(err.Error(), "users_username_key") {
+				http.Error(
+					w,
+					"Username is already taken.",
+					http.StatusConflict,
+				)
+				return
+			}
+
+			log.Println("Error creating user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(
+			`
+			UPDATE sessions
+			SET user_id = $1
+			WHERE id = $2
+			  AND user_id IS NULL
+			`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error associating session with user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(
+			`
+			UPDATE jobs
+			SET user_id = $1,
+			    session_id = NULL
+			WHERE session_id = $2
+			`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error transferring guest jobs:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Println("Error committing registration:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func LoginHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			err := LoginTemplate.Execute(w, nil)
+			if err != nil {
+				log.Println("Error rendering login template:", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID != nil {
+			http.Error(w, "Already logged in.", http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(r.FormValue("username"))
+		password := r.FormValue("password")
+
+		if username == "" || password == "" {
+			http.Error(
+				w,
+				"Username and password are required.",
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		var userID int64
+		var passwordHash string
+
+		err := db.QueryRow(
+			`SELECT id, password_hash FROM users WHERE username = $1`,
+			username,
+		).Scan(&userID, &passwordHash)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(
+					w,
+					"Invalid username or password.",
+					http.StatusUnauthorized,
+				)
+				return
+			}
+
+			log.Println("Error querying user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); err != nil {
+			http.Error(
+				w,
+				"Invalid username or password.",
+				http.StatusUnauthorized,
+			)
+			return
+		}
+
+		result, err := db.Exec(
+			`
+   		UPDATE sessions
+    	SET user_id = $1
+    	WHERE id = $2
+      	AND user_id IS NULL
+    	`,
+			userID,
+			identity.SessionID,
+		)
+		if err != nil {
+			log.Println("Error associating session with user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Println("Error checking session update:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected != 1 {
+			http.Error(w, "Invalid session.", http.StatusUnauthorized)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func LogoutHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		identity, ok := auth.IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if identity.UserID == nil {
+			http.Error(w, "Not logged in.", http.StatusBadRequest)
+			return
+		}
+
+		result, err := db.Exec(
+			`UPDATE sessions SET user_id = NULL WHERE id = $1 AND user_id = $2`,
+			identity.SessionID,
+			*identity.UserID,
+		)
+		if err != nil {
+			log.Println("Error disassociating session from user:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Println("Error checking session update:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected != 1 {
+			http.Error(w, "Invalid session.", http.StatusUnauthorized)
+			return
+		}
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
+func validUsername(username string) bool {
+	for _, character := range username {
+		if !unicode.IsLetter(character) &&
+			!unicode.IsDigit(character) &&
+			character != '_' {
+			return false
+		}
+	}
+
+	return true
 }
