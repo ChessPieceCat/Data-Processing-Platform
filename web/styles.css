@@ -20,7 +20,7 @@
 body {
     max-width: 1400px;
     margin: 0 auto;
-    padding: 40px;
+    padding: 32px;
     background: var(--background);
     color: var(--text);
     font-family: Arial, Helvetica, sans-serif;
@@ -41,7 +41,7 @@ header {
 
 header h1 {
     margin: 0;
-    font-size: 2rem;
+    font-size: 1.8rem;
 }
 
 header nav {
@@ -69,7 +69,7 @@ a:hover {
 main {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
 }
 
 .job-section {
@@ -96,7 +96,7 @@ main {
 .result-section h2 {
     margin-top: 0;
     margin-bottom: 20px;
-    font-size: 1.5rem;
+    font-size: 1.35rem;
 }
 
 .job-section h3,
@@ -370,7 +370,7 @@ hr {
 .results-page {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
 }
 
 .result-title {
@@ -554,7 +554,7 @@ hr {
 
     .job-section,
     .result-section {
-        padding: 20px;
+        padding: 16px;
     }
 
     input,
@@ -619,4 +619,40 @@ hr {
     .result-visualizations {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+}
+
+.sample-files {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 36px;
+}
+
+.sample-files-label {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.sample-file-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.sample-file-links a {
+    display: inline-block;
+    padding: 6px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--accent);
+    font-size: 0.85rem;
+    text-decoration: none;
+}
+
+.sample-file-links a:hover {
+    background: var(--surface-raised);
+    border-color: var(--primary);
+    text-decoration: none;
 }

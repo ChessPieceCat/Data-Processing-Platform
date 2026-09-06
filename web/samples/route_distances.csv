@@ -1,0 +1,6 @@
+location,Warehouse,Customer A,Customer B,Customer C,Customer D
+Warehouse,0,1,5,5,3
+Customer A,1,0,1,5,5
+Customer B,5,1,0,1,2
+Customer C,5,5,1,0,20
+Customer D,3,5,2,20,0
