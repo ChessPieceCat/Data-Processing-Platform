@@ -6,8 +6,6 @@ services:
       prometheus.scrape: "true"
       prometheus.port: "8082"
       prometheus.job: "app"
-    ports:
-      - "8084:8082"
     environment:
       STORAGE_BACKEND: s3
       S3_BUCKET: data-processing-platform-chess
@@ -83,7 +81,23 @@ services:
     depends_on:
       - prometheus
 
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
 volumes:
   redis_data:
   prometheus_data:
   grafana_data:
+  caddy_data:
+  caddy_config:

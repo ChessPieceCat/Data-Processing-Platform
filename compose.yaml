@@ -4,6 +4,8 @@ volumes:
   uploads_data:
   prometheus_data:
   grafana_data:
+  caddy_data:
+  caddy_config:
 
 services:
   app:
@@ -114,3 +116,17 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
