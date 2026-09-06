@@ -3133,3 +3133,36 @@ func validUsername(username string) bool {
 
 	return true
 }
+
+// JobStatusHandler returns the current status of a job
+func JobStatusHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID, err := parseJobID(r)
+		if err != nil {
+			http.Error(w, "Invalid job ID", http.StatusBadRequest)
+			return
+		}
+
+		job, err := getOwnedJob(r, db, jobID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "Job not found", http.StatusNotFound)
+				return
+			}
+
+			log.Printf("Error retrieving job %d: %v", jobID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := json.NewEncoder(w).Encode(struct {
+			Status string `json:"status"`
+		}{
+			Status: job.Status,
+		}); err != nil {
+			log.Printf("Error encoding job status: %v", err)
+		}
+	}
+}

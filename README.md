@@ -37,6 +37,7 @@ The current implementation supports:
   - processing
   - completed
   - failed
+- Live job-status polling on the web interface
 - Multiple concurrent worker replicas consuming from a shared Redis consumer group
 - Unique Redis consumer identities for individual workers
 - Pending-job recovery and reassignment after worker interruption
@@ -1010,7 +1011,6 @@ Planned future work includes:
 - additional route constraints and time-window handling
 - route visualizations or other specialized artifacts
 - additional job types and processors
-- live job-status updates or polling
 - further frontend and user-interface refinement
 - additional monitoring dashboards and alerting
 
