@@ -81,6 +81,8 @@ func main() {
 		apphttp.IndexHandler(db, tmpl),
 	)
 
+	http.Handle("/jobs/status", apphttp.JobStatusHandler(db))
+
 	// Handle Prometheus metrics endpoint.
 	http.Handle("/metrics", metrics.Handler(metricsRegistry))
 

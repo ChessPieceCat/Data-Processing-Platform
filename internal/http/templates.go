@@ -8,43 +8,59 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Job #{{.Job.ID}} Results</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-    <h1>Job #{{.Job.ID}} Results</h1>
+<div class="results-page">
+    <h1 class="result-title">Job #{{.Job.ID}} Results</h1>
 
-    <section>
+    <section class="result-section result-info">
         <h2>Job Information</h2>
-        <dl>
+        <dl class="result-grid">
+
+        <div class="result-item">
             <dt>Type</dt>
             <dd>{{.Job.Type}}</dd>
+        </div>
 
+        <div class="result-item">
             <dt>Status</dt>
-            <dd>{{.Job.Status}}</dd>
+            <dd class="result-status status-{{.Job.Status}}">
+                {{.Job.Status}}
+            </dd>
+        </div>
 
+        <div class="result-item">
             <dt>Created</dt>
             <dd>{{.Job.CreatedAt}}</dd>
+        </div>
 
-            {{with .Job.StartedAt}}
+        {{with .Job.StartedAt}}
+        <div class="result-item">
             <dt>Started</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
 
-            {{with .Job.CompletedAt}}
+        {{with .Job.CompletedAt}}
+        <div class="result-item">
             <dt>Completed</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
+
         </dl>
     </section>
 
     {{with .Job.ErrorMessage}}
-    <section>
+    <section class="result-section result-error">
         <h2>Error</h2>
         <p>{{.}}</p>
     </section>
     {{end}}
 
     {{if .Results}}
-    <section>
+    <section class="result-section">
         <h2>Dataset Overview</h2>
 
         <dl>
@@ -57,17 +73,17 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
 
         <h3>Columns</h3>
 
-        <ul>
+        <ul class="result-list">
             {{range .Results.ColumnNames}}
                 <li>{{.}}</li>
             {{end}}
         </ul>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Data Types</h2>
 
-        <table>
+        <table class="result-table">
             <thead>
                 <tr>
                     <th>Column</th>
@@ -85,10 +101,10 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         </table>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Missing Values</h2>
 
-        <table>
+        <table class="result-table">
             <thead>
                 <tr>
                     <th>Column</th>
@@ -106,12 +122,12 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         </table>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Duplicates and Unique Values</h2>
 
         <p>Duplicate rows: {{.Results.DuplicateRows}}</p>
 
-        <table>
+        <table class="result-table">
             <thead>
                 <tr>
                     <th>Column</th>
@@ -129,13 +145,13 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         </table>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Descriptive Statistics</h2>
 
         {{range $column, $stats := .Results.DescriptiveStats}}
         <h3>{{$column}}</h3>
 
-        <table>
+        <table class="result-table">
             <tr>
                 <th>Count</th>
                 <td>{{$stats.Count}}</td>
@@ -172,32 +188,42 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         {{end}}
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Numeric Summary</h2>
 
         {{range $column, $summary := .Results.NumericSummary}}
         <h3>{{$column}}</h3>
 
-        <dl>
-            <dt>Mean</dt>
-            <dd>{{$summary.Mean}}</dd>
+        <dl class="result-grid result-summary">
+            <div class="result-item">
+                <dt>Mean</dt>
+                <dd>{{$summary.Mean}}</dd>
+            </div>
 
-            <dt>Median</dt>
-            <dd>{{$summary.Median}}</dd>
+            <div class="result-item">
+                <dt>Median</dt>
+                <dd>{{$summary.Median}}</dd>
+            </div>
 
-            <dt>Standard Deviation</dt>
-            <dd>{{$summary.StdDev}}</dd>
+            <div class="result-item">
+                <dt>Standard Deviation</dt>
+                <dd>{{$summary.StdDev}}</dd>
+            </div>
 
-            <dt>Minimum</dt>
-            <dd>{{$summary.Min}}</dd>
+            <div class="result-item">
+                <dt>Minimum</dt>
+                <dd>{{$summary.Min}}</dd>
+            </div>
 
-            <dt>Maximum</dt>
-            <dd>{{$summary.Max}}</dd>
+            <div class="result-item">
+                <dt>Maximum</dt>
+                <dd>{{$summary.Max}}</dd>
+            </div>
         </dl>
         {{end}}
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Categorical Summary</h2>
 
         {{range $column, $summary := .Results.CategoricalSummary}}
@@ -206,7 +232,7 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         <p>Mode: {{$summary.Mode}}</p>
         <p>Unique values: {{$summary.UniqueValues}}</p>
 
-        <table>
+        <table class="result-table">
             <thead>
                 <tr>
                     <th>Value</th>
@@ -225,23 +251,28 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         {{end}}
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Outliers</h2>
 
         {{range $column, $summary := .Results.OutlierSummary}}
         <h3>{{$column}}</h3>
 
-        <p>Number of outliers: {{$summary.NumOutliers}}</p>
+        <dl class="result-grid result-summary">
+            <div class="result-item">
+                <dt>Number of Outliers</dt>
+                <dd>{{$summary.NumOutliers}}</dd>
+            </div>
+        </dl>
         {{end}}
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Correlation Matrix</h2>
 
         {{range $column, $correlations := .Results.CorrelationMatrix}}
         <h3>{{$column}}</h3>
 
-        <ul>
+        <ul class="result-list">
             {{range $otherColumn, $value := $correlations}}
                 <li>{{$otherColumn}}: {{$value}}</li>
             {{end}}
@@ -249,33 +280,33 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
         {{end}}
     </section>
 
-    <p>
+    <div class="result-actions">
         <a href="/results/download?id={{.Job.ID}}">
             Download results JSON
         </a>
-    </p>
+    </div>
 
     {{if .ModelResults}}
-    <section>
+    <section class="result-section">
         <h2>Model Results</h2>
 
         <p>Model Type: {{.ModelResults.Model}}</p>
         <p>R²: {{.ModelResults.Evaluation.R2}}</p>
         <p>Mean Squared Error: {{.ModelResults.Evaluation.MSE}}</p>
         <p>Features:</p>
-        <ul>
+        <ul class="result-list">
             {{range .ModelResults.FeaturesUsed}}
                 <li>{{.}}</li>
             {{end}}
         </ul>
         <p>Feature Importances:</p>
-        <ul>
+        <ul class="result-list">
             {{range $feature, $importance := .ModelResults.FeatureImportances}}
                 <li>{{$feature}}: {{$importance}}</li>
             {{end}}
         </ul>
         <p>Actual vs Predicted Values:</p>
-        <ul>
+        <ul class="result-list">
         {{range .ModelResults.ActualVsPredicted}}
             <li>Actual: {{.Actual}}, Predicted: {{.Predicted}}</li>
         {{end}}
@@ -299,36 +330,53 @@ var DatasetResultsTemplate = template.Must(template.New("dataset_results").Parse
 
     {{else}}
         {{if eq .Job.Status "processing"}}
+        <div class="result-status-message status-processing">
             <p>The dataset is still being processed.</p>
+        </div>
         {{else if eq .Job.Status "queued"}}
+        <div class="result-status-message status-queued">
             <p>The job is waiting to be processed.</p>
+        </div>
         {{else}}
+        <div class="result-status-message">
             <p>No dataset results are currently available.</p>
+        </div>
         {{end}}
     {{end}}
 
     {{if .VisualizationResults}}
-    <section>
+    <section class="result-section">
         <h2>Visualizations</h2>
 
-        {{if .VisualizationResults.FeatureDistributions}}
-        <h3>Feature Distributions</h3>
-        <img src="/results/visualization?id={{.Job.ID}}&type=feature_distributions" alt="Feature Distributions">
-        {{end}}
+        <div class="result-visualizations">
+            {{if .VisualizationResults.FeatureDistributions}}
+            <div class="result-visualization">
+                <h3>Feature Distributions</h3>
+                <img src="/results/visualization?id={{.Job.ID}}&type=feature_distributions" alt="Feature Distributions">
+            </div>
+            {{end}}
 
-        {{if .VisualizationResults.CorrelationHeatmap}}
-        <h3>Correlation Heatmap</h3>
-        <img src="/results/visualization?id={{.Job.ID}}&type=correlation_heatmap" alt="Correlation Heatmap">
-        {{end}}
+            {{if .VisualizationResults.CorrelationHeatmap}}
+            <div class="result-visualization">
+                <h3>Correlation Heatmap</h3>
+                <img src="/results/visualization?id={{.Job.ID}}&type=correlation_heatmap" alt="Correlation Heatmap">
+            </div>
+            {{end}}
 
-        {{if .VisualizationResults.ActualVsPredicted}}
-        <h3>Actual vs Predicted</h3>
-        <img src="/results/visualization?id={{.Job.ID}}&type=actual_vs_predicted" alt="Actual vs Predicted">
-        {{end}}
+            {{if .VisualizationResults.ActualVsPredicted}}
+            <div class="result-visualization">
+                <h3>Actual vs Predicted</h3>
+                <img src="/results/visualization?id={{.Job.ID}}&type=actual_vs_predicted" alt="Actual vs Predicted">
+            </div>
+            {{end}}
+        </div>
     </section>
     {{end}}
 
-    <p><a href="/">Back to jobs</a></p>
+    <div class="result-actions">
+        <a href="/">Back to jobs</a>
+    </div>
+</div>
 </body>
 </html>`))
 
@@ -340,38 +388,53 @@ var ImageResultsTemplate = template.Must(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Results for Job #{{.Job.ID}}</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 
 <body>
-    <h1>Image Results for Job #{{.Job.ID}}</h1>
+<div class="results-page">
+    <h1 class="result-title">Image Results for Job #{{.Job.ID}}</h1>
 
-    <section>
+    <section class="result-section result-info">
         <h2>Job Information</h2>
+        <dl class="result-grid">
 
-        <dl>
+        <div class="result-item">
             <dt>Type</dt>
             <dd>{{.Job.Type}}</dd>
+        </div>
 
+        <div class="result-item">
             <dt>Status</dt>
-            <dd>{{.Job.Status}}</dd>
+            <dd class="result-status status-{{.Job.Status}}">
+                {{.Job.Status}}
+            </dd>
+        </div>
 
+        <div class="result-item">
             <dt>Created</dt>
             <dd>{{.Job.CreatedAt}}</dd>
+        </div>
 
-            {{with .Job.StartedAt}}
+        {{with .Job.StartedAt}}
+        <div class="result-item">
             <dt>Started</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
 
-            {{with .Job.CompletedAt}}
+        {{with .Job.CompletedAt}}
+        <div class="result-item">
             <dt>Completed</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
+
         </dl>
     </section>
 
     {{with .Job.ErrorMessage}}
-    <section>
+    <section class="result-section result-error">
         <h2>Error</h2>
         <p>{{.}}</p>
     </section>
@@ -379,33 +442,33 @@ var ImageResultsTemplate = template.Must(
 
     {{if .ImageResults}}
 
-    <section>
+    <section class="result-section">
         <h2>Images</h2>
 
-        <div>
+        <div class="result-images">
+        <div class="result-image">
             <h3>Original Image</h3>
             <img
                 src="/results/image?id={{.Job.ID}}&type=original"
                 alt="Original image"
-                style="max-width: 100%;"
             >
         </div>
 
-        <div>
+        <div class="result-image">
             <h3>Processed Image</h3>
             <img
                 src="/results/image?id={{.Job.ID}}&type=processed"
                 alt="Processed image"
-                style="max-width: 100%;"
             >
+        </div>
         </div>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Processing Operations</h2>
 
         {{if .ImageResults.Operations}}
-        <ul>
+        <ul class="result-list">
             {{range .ImageResults.Operations}}
             <li>{{.}}</li>
             {{end}}
@@ -415,63 +478,79 @@ var ImageResultsTemplate = template.Must(
         {{end}}
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Original Image</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Format</dt>
             <dd>{{.ImageResults.OriginalFormat}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Dimensions</dt>
             <dd>
                 {{.ImageResults.OriginalWidth}}
                 ×
                 {{.ImageResults.OriginalHeight}}
             </dd>
+            </div>
         </dl>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Processed Image</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Format</dt>
             <dd>{{.ImageResults.ResultFormat}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Dimensions</dt>
             <dd>
                 {{.ImageResults.ResultWidth}}
                 ×
                 {{.ImageResults.ResultHeight}}
             </dd>
+            </div>
         </dl>
     </section>
 
     {{with .ImageResults.Compression}}
-    <section>
+    <section class="result-section">
         <h2>Compression</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Original Size</dt>
             <dd>{{.OriginalSize}} bytes</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Result Size</dt>
             <dd>{{.ResultSize}} bytes</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Compression Ratio</dt>
             <dd>{{.CompressionRatio}}</dd>
+            </div>
         </dl>
     </section>
     {{end}}
 
     {{if .ImageResults.Metadata}}
-    <section>
+    <section class="result-section">
         <h2>Metadata</h2>
 
-        <dl>
+        <dl class="result-grid">
             {{range $key, $value := .ImageResults.Metadata}}
+            <div class="result-item">
             <dt>{{$key}}</dt>
             <dd>{{$value}}</dd>
+            </div>
             {{end}}
         </dl>
 
@@ -485,7 +564,7 @@ var ImageResultsTemplate = template.Must(
     </section>
     {{else}}
         {{if .ImageResults.MetadataReference}}
-        <section>
+        <section class="result-section">
             <h2>Metadata</h2>
             <p>
                 Full metadata was extracted but is not displayed in the
@@ -501,23 +580,31 @@ var ImageResultsTemplate = template.Must(
 
     {{else}}
         {{if eq .Job.Status "processing"}}
-        <p>The image is still being processed.</p>
+        <div class="result-status-message status-processing">
+            <p>The image is still being processed.</p>
+        </div>
 
         {{else if eq .Job.Status "queued"}}
-        <p>The job is waiting to be processed.</p>
+        <div class="result-status-message status-queued">
+            <p>The job is waiting to be processed.</p>
+        </div>
 
         {{else if eq .Job.Status "failed"}}
-        <p>Image processing failed.</p>
+        <div class="result-status-message status-failed">
+            <p>Image processing failed.</p>
+        </div>
 
         {{else}}
+        <div class="result-status-message">
         <p>No image results are currently available.</p>
+        </div>
         {{end}}
     {{end}}
 
-    <p>
+    <div class="result-actions">
         <a href="/">Back to jobs</a>
-    </p>
-
+    </div>
+</div>
 </body>
 </html>`),
 )
@@ -530,39 +617,54 @@ var RouteResultsTemplate = template.Must(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Route Results for Job #{{.Job.ID}}</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 
 <body>
+<div class="results-page">
 
-    <h1>Route Results for Job #{{.Job.ID}}</h1>
+    <h1 class="result-title">Route Results for Job #{{.Job.ID}}</h1>
 
-    <section>
+    <section class="result-section result-info">
         <h2>Job Information</h2>
+        <dl class="result-grid">
 
-        <dl>
+        <div class="result-item">
             <dt>Type</dt>
             <dd>{{.Job.Type}}</dd>
+        </div>
 
+        <div class="result-item">
             <dt>Status</dt>
-            <dd>{{.Job.Status}}</dd>
+            <dd class="result-status status-{{.Job.Status}}">
+                {{.Job.Status}}
+            </dd>
+        </div>
 
+        <div class="result-item">
             <dt>Created</dt>
             <dd>{{.Job.CreatedAt}}</dd>
+        </div>
 
-            {{with .Job.StartedAt}}
+        {{with .Job.StartedAt}}
+        <div class="result-item">
             <dt>Started</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
 
-            {{with .Job.CompletedAt}}
+        {{with .Job.CompletedAt}}
+        <div class="result-item">
             <dt>Completed</dt>
             <dd>{{.}}</dd>
-            {{end}}
+        </div>
+        {{end}}
+
         </dl>
     </section>
 
     {{with .Job.ErrorMessage}}
-    <section>
+    <section class="result-section result-error">
         <h2>Error</h2>
         <p>{{.}}</p>
     </section>
@@ -570,28 +672,36 @@ var RouteResultsTemplate = template.Must(
 
     {{if .RouteResults}}
 
-    <section>
+    <section class="result-section">
         <h2>Route Configuration</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Starting Location</dt>
             <dd>{{.RouteResults.StartLocation}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Ending Location</dt>
             <dd>{{.RouteResults.EndLocation}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Algorithm</dt>
             <dd>{{.RouteResults.Algorithm}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>2-opt Applied</dt>
             <dd>{{.RouteResults.TwoOptApplied}}</dd>
+            </div>
         </dl>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Initial Route</h2>
 
-        <ol>
+        <ol class="result-list">
             {{range .RouteResults.InitialRoute}}
             <li>{{.}}</li>
             {{end}}
@@ -603,10 +713,10 @@ var RouteResultsTemplate = template.Must(
         </p>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Optimized Route</h2>
 
-        <ol>
+        <ol class="result-list">
             {{range .RouteResults.OptimizedRoute}}
             <li>{{.}}</li>
             {{end}}
@@ -618,63 +728,82 @@ var RouteResultsTemplate = template.Must(
         </p>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Optimization Results</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Distance Improvement</dt>
             <dd>{{.RouteResults.DistanceImprovement}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Improvement Percentage</dt>
             <dd>{{.RouteResults.ImprovementPercentage}}%</dd>
+            </div>
         </dl>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Constraints</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Feasible</dt>
             <dd>{{.RouteResults.Feasible}}</dd>
+            </div>
         </dl>
     </section>
 
-    <section>
+    <section class="result-section">
         <h2>Performance</h2>
 
-        <dl>
+        <dl class="result-grid">
+            <div class="result-item">
             <dt>Algorithm</dt>
             <dd>{{.RouteResults.Algorithm}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>2-opt Applied</dt>
             <dd>{{.RouteResults.TwoOptApplied}}</dd>
+            </div>
 
+            <div class="result-item">
             <dt>Runtime</dt>
             <dd>{{.RouteResults.RuntimeSeconds}} seconds</dd>
+            </div>
         </dl>
     </section>
 
     {{else}}
-
         {{if eq .Job.Status "processing"}}
-        <p>The route is still being processed.</p>
+        <div class="result-status-message status-processing">
+            <p>The route is still being processed.</p>
+        </div>
 
         {{else if eq .Job.Status "queued"}}
-        <p>The job is waiting to be processed.</p>
+        <div class="result-status-message status-queued">
+            <p>The job is waiting to be processed.</p>
+        </div>
 
         {{else if eq .Job.Status "failed"}}
-        <p>Route processing failed.</p>
+        <div class="result-status-message status-failed">
+            <p>Route processing failed.</p>
+        </div>
 
         {{else}}
-        <p>No route results are currently available.</p>
+        <div class="result-status-message">
+            <p>No route results are currently available.</p>
+        </div>
         {{end}}
 
     {{end}}
 
-    <p>
+    <div class="result-actions">
         <a href="/">Back to jobs</a>
-    </p>
-
+    </div>
+</div>
 </body>
 </html>`),
 )
@@ -685,6 +814,7 @@ var RegisterTemplate = template.Must(template.New("register").Parse(`<!DOCTYPE h
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <h1>Create an Account</h1>
@@ -726,6 +856,7 @@ var LoginTemplate = template.Must(template.New("login").Parse(`
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <h1>Log In</h1>

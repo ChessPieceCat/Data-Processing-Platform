@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Data Processing Platform</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 
 <body>
@@ -30,10 +31,10 @@
     <main>
 
         <!-- Dataset Processing -->
-        <section>
+        <section class="job-section">
             <h2>Dataset Analysis</h2>
 
-            <div>
+            <div class="file-upload-group">
                 <label for="csvFile">Upload a CSV file:</label>
                 <input
                     type="file"
@@ -59,7 +60,7 @@
                     <section>
                         <h3>Model Configuration</h3>
 
-                        <div>
+                        <div class="model-config">
                             <label for="model">Model:</label>
                             <select name="model" id="model">
                                 <option value="none" selected>
@@ -247,10 +248,10 @@
         <hr>
 
         <!-- Image Processing -->
-        <section>
+        <section class="job-section">
             <h2>Image Processing</h2>
 
-            <div>
+            <div class="file-upload-group">
                 <label for="imageFile">
                     Upload an image:
                 </label>
@@ -277,7 +278,7 @@
                         <legend>Image Processing Options</legend>
 
                         <!-- Resize -->
-                        <div>
+                        <div class="image-options">
                             <h3>Resize</h3>
 
                             <label>
@@ -322,7 +323,7 @@
                         <br>
 
                         <!-- Compression -->
-                        <div>
+                        <div class="image-options">
                             <h3>Compression</h3>
 
                             <label>
@@ -356,7 +357,7 @@
                         <br>
 
                         <!-- Format conversion -->
-                        <div>
+                        <div class="image-options">
                             <h3>Format Conversion</h3>
 
                             <label>
@@ -398,7 +399,7 @@
                         <br>
 
                         <!-- Metadata extraction -->
-                        <div>
+                        <div class="image-options">
                             <h3>Metadata</h3>
 
                             <label>
@@ -424,7 +425,7 @@
         <hr>
 
         <!-- Route Optimization -->
-        <section>
+        <section class="job-section">
             <h2>Route Optimization</h2>
 
             <form action="/submit/route" method="post">
@@ -437,7 +438,7 @@
                 <fieldset>
                     <legend>Route Input</legend>
 
-                    <div>
+                    <div class="file-upload-group">
                         <label for="routeFile">
                             Route CSV:
                         </label>
@@ -453,7 +454,7 @@
 
                     <br>
 
-                    <div>
+                    <div class="file-upload-group">
                         <label for="distanceFile">
                             Distance Table CSV:
                         </label>
@@ -473,7 +474,7 @@
                 <fieldset id="routeOptions" hidden>
                     <legend>Route Configuration</legend>
 
-                    <div>
+                    <div class="route-config">
                         <label for="startLocation">
                             Starting location:
                         </label>
@@ -491,7 +492,7 @@
 
                     <br>
 
-                    <div>
+                    <div class="route-config">
                         <label for="endLocation">
                             Ending location:
                         </label>
@@ -505,15 +506,11 @@
                             </option>
                         </select>
 
-                        <p>
-                            Leave this unchanged to return to the
-                            starting location.
-                        </p>
                     </div>
 
                     <br>
 
-                    <div>
+                    <div class="route-config">
                         <label for="routeAlgorithm">
                             Algorithm:
                         </label>
@@ -537,7 +534,7 @@
                     <fieldset>
                         <legend>Constraints</legend>
 
-                        <div>
+                        <div class="route-config">
                             <label for="maxDistance">
                                 Maximum distance:
                             </label>
@@ -554,7 +551,7 @@
 
                         <br>
 
-                        <div>
+                        <div class="route-config">
                             <label for="maxStops">
                                 Maximum stops:
                             </label>
@@ -589,23 +586,28 @@
             <h2>Jobs</h2>
 
             {{if .Jobs}}
-                <ul>
+                <ul class="job-list">
                     {{range .Jobs}}
-                        <li>
-                            <a href="/results?id={{.ID}}">
-                                Job #{{.ID}} — {{.Type}} — {{.Status}}
+                        <li class="job-card" data-job-id="{{.ID}}">
+                            <a href="/results?id={{.ID}}" class="job-link">
+                                <span class="job-id">Job #{{.ID}}</span>
+                                <span class="job-type">{{.Type}}</span>
+                                <span class="job-status status-{{.Status}}">
+                                    {{.Status}}
+                                </span>
                             </a>
                         </li>
                     {{end}}
                 </ul>
             {{else}}
-                <p>No jobs yet.</p>
+                <p class="empty-state">No jobs yet.</p>
             {{end}}
         </section>
 
     </main>
 
     <script src="/static/js/dataset.js"></script>
+    <script src="/static/js/status.js"></script>
 </body>
 
 </html>
