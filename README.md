@@ -999,7 +999,7 @@ Current job types:
 
 Additional job types and processors are planned for later iterations.
 
-AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The deployment uses an ARM64 Docker image running the Go HTTP server, Go worker, and Redis on an EC2 instance; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The deployment uses an ARM64 Docker image running the Go HTTP server, Go worker, Redis, and Caddy on an EC2 instance; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
 
 GitHub Actions provides continuous integration, ARM64 image publication to Amazon ECR, Terraform pull-request planning, and automated EC2 deployment through AWS Systems Manager. GitHub OIDC is used for AWS authentication, with separate roles for Terraform planning, image publication, and deployment.
 
@@ -1010,10 +1010,9 @@ Planned future work includes:
 - additional route constraints and time-window handling
 - route visualizations or other specialized artifacts
 - additional job types and processors
-- further worker and processing abstractions where shared behavior warrants them
-- broader integration testing
-- additional AWS production hardening
-- additional monitoring dashboards, alerting, and production observability hardening
+- live job-status updates or polling
+- further frontend and user-interface refinement
+- additional monitoring dashboards and alerting
 
 ---
 
