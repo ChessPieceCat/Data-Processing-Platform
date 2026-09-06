@@ -248,6 +248,10 @@ AWS Deployment
 Browser
     |
     v
+Caddy
+:80 / :443
+    |
+    v
 EC2 Docker Compose
     |
     +---- Go HTTP server
@@ -269,10 +273,10 @@ EC2 Docker Compose
     |   +---- Grafana dashboard
     v
 ProcessJob
-    |
-    +---- Dataset processor
-    +---- Image processor
-    +---- Route processor
+   |
+   +---- Dataset processor
+   +---- Image processor
+   +---- Route processor
 ```
 
 The application and worker are separate processes:
@@ -283,7 +287,7 @@ The application and worker are separate processes:
 - **Redis** transports job IDs asynchronously between the application and worker.
 - The application and worker use a shared object-storage abstraction for persistent job inputs, configuration, results, and generated artifacts.
 
-The current AWS deployment runs the Go server, Go worker, Redis, Prometheus, and Grafana as Docker containers on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. Prometheus discovers the application and worker containers through the Docker socket and scrapes their `/metrics` endpoints. Grafana uses Prometheus as its datasource and loads its dashboard and datasource configuration from version-controlled provisioning files. RDS master credentials are managed through AWS Secrets Manager and retrieved using the EC2 IAM role. CloudWatch collects application logs and EC2 monitoring metrics.
+The current AWS deployment runs Caddy, the Go server, Go worker, Redis, Prometheus, and Grafana as Docker containers on the same EC2 instance, with Amazon RDS providing managed PostgreSQL and Amazon S3 providing persistent job storage. Caddy is the only public application entry point. Prometheus discovers the application and worker containers through the Docker socket and scrapes their `/metrics` endpoints. Grafana uses Prometheus as its datasource and loads its dashboard and datasource configuration from version-controlled provisioning files. RDS master credentials are managed through AWS Secrets Manager and retrieved using the EC2 IAM role. CloudWatch collects application logs and EC2 monitoring metrics.
 
 The production application image is built for ARM64 to match the t4g.micro EC2 instance and is published to Amazon ECR. The main branch deployment workflow uses GitHub OIDC to authenticate to AWS and AWS Systems Manager to update the EC2 deployment to the image associated with the triggering commit.
 
@@ -306,6 +310,40 @@ The application also enforces a maximum of 100 outstanding jobs, counting both `
 PostgreSQL remains responsible for persistent job state and metadata, while Redis is responsible for transporting work between the API and worker.
 
 Persistent job inputs, configuration, results, and other job artifacts are stored through the object-storage abstraction. Local development uses the filesystem-backed implementation under uploads/, while AWS deployments use Amazon S3. Processor execution uses a temporary local workspace regardless of the configured persistent storage backend.
+
+---
+
+## Public Deployment
+
+The application is publicly deployed at `https://app.bunnell.app`.
+
+Caddy runs as part of the AWS Docker Compose deployment and acts as the public reverse proxy for the Go HTTP server. It listens on ports 80 and 443 and forwards application requests to the Go server over the internal Docker network.
+
+Caddy automatically manages the TLS certificate for `app.bunnell.app` and redirects HTTP requests to HTTPS.
+
+DNS for `app.bunnell.app` is configured through an A record pointing to the EC2 instance's Elastic IP address.
+
+The Go application does not expose its HTTP port publicly in the AWS deployment. The application listens on port 8082 inside the Docker network and is reachable by Caddy through the `app:8082` service address.
+
+The intended public network boundary is:
+
+```text
+Internet
+    |
+    +---- TCP 80  ----+
+    |                 |
+    +---- TCP 443 ----+---- Caddy
+    |                 |
+    +---- UDP 443 ----+
+                      |
+                      v
+                  Go HTTP server
+                    (app:8082)
+```
+
+The EC2 security group permits public access only to the intended web ports and restricts SSH access to the configured administrative source. Prometheus, Grafana, Redis, and the application port are not publicly exposed.
+
+EC2 administration remains available through AWS Systems Manager Session Manager.
 
 ---
 
@@ -961,7 +999,7 @@ Current job types:
 
 Additional job types and processors are planned for later iterations.
 
-AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The deployment uses an ARM64 Docker image running the Go HTTP server, Go worker, and Redis on an EC2 instance; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
+AWS deployment is now operational for the core application and is represented as Terraform-managed infrastructure. The deployment uses an ARM64 Docker image running the Go HTTP server, Go worker, Redis, and Caddy on an EC2 instance; Amazon RDS for managed PostgreSQL; Amazon S3 for persistent job storage; AWS Secrets Manager for managed RDS credentials; IAM-based access from EC2; and CloudWatch logging and monitoring. Dataset, image, and route jobs have been successfully executed end-to-end in AWS, including persistence and retrieval of generated result artifacts.
 
 GitHub Actions provides continuous integration, ARM64 image publication to Amazon ECR, Terraform pull-request planning, and automated EC2 deployment through AWS Systems Manager. GitHub OIDC is used for AWS authentication, with separate roles for Terraform planning, image publication, and deployment.
 
@@ -972,10 +1010,9 @@ Planned future work includes:
 - additional route constraints and time-window handling
 - route visualizations or other specialized artifacts
 - additional job types and processors
-- further worker and processing abstractions where shared behavior warrants them
-- broader integration testing
-- additional AWS production hardening
-- additional monitoring dashboards, alerting, and production observability hardening
+- live job-status updates or polling
+- further frontend and user-interface refinement
+- additional monitoring dashboards and alerting
 
 ---
 
