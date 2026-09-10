@@ -163,6 +163,7 @@ jobs:
                   "docker compose --env-file /home/ubuntu/.env.aws -f compose.aws.yaml pull",
                   "docker compose --env-file /home/ubuntu/.env.aws -f compose.aws.yaml up -d --force-recreate",
                   "docker compose --env-file /home/ubuntu/.env.aws -f compose.aws.yaml ps"
+                  "docker image prune -a -f"
                 ]
               }')" \
             --query 'Command.CommandId' \
